@@ -206,10 +206,16 @@ const ASSETS = {
   sheet:   'Assets/fighters.png',
   bg:      'Assets/backgrouns.png', // typo preserved per project asset filename
   victory: 'Assets/victory.png',
+  // Optional: drop Assets/portraits.png next to the others to upgrade the
+  // final-two close-ups. Frame layout is auto-detected — supports any
+  // horizontal strip of equal-content cells with transparent gutters.
+  portraits: 'Assets/portraits.png',
 };
 const SFX_SRC = {
   punch:  'sounds/punch.mp3',
   winner: 'sounds/winner.mp3',
+  // Final-battle stinger; intro plays silently if the file is missing.
+  final:  'sounds/finalround.mp3',
 };
 const SHEET_W = 1248, SHEET_H = 1248;
 const COLS = 5, ROWS = 5;
@@ -261,6 +267,8 @@ const CANVAS_W = 800, CANVAS_H = 500;
 // =========================================================================
 let names = [];               // current roster from setup
 let sheetImg = null, bgImg = null, victoryImg = null;
+let portraitsSheet = null;     // optional: Assets/portraits.png if present
+let PORTRAIT_FRAMES = null;    // auto-detected on portrait load
 const sfx = {}; // populated in boot()
 let canvas, ctx;
 let fighters = [];            // active + downed Fighter objects
@@ -404,6 +412,97 @@ function makeTintedSheet(sourceImg, color) {
 }
 
 // =========================================================================
+// PORTRAIT AUTO-DETECTION (hot-swap support for Assets/portraits.png)
+// Density-based gutter detection — same approach used offline for fighters.png.
+// Returns an array of [sx, sy, sw, sh] tight to the content of each frame.
+// Designed for a horizontal strip of 1+ frames with transparent gutters between.
+// =========================================================================
+function detectStripFrames(img) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const cx = c.getContext('2d');
+  cx.drawImage(img, 0, 0);
+  let data;
+  try { data = cx.getImageData(0, 0, W, H).data; }
+  catch { console.warn('Portrait detection skipped (canvas tainted).'); return null; }
+
+  const isSolid = (i) => data[i+3] >= 128 && !(data[i] > 240 && data[i+1] > 240 && data[i+2] > 240);
+
+  // 1. Find row band with content
+  let y0 = -1, y1 = -1;
+  for (let y = 0; y < H && y0 === -1; y++) {
+    for (let x = 0; x < W; x++) if (isSolid((y*W+x)*4)) { y0 = y; break; }
+  }
+  for (let y = H-1; y >= 0 && y1 === -1; y--) {
+    for (let x = 0; x < W; x++) if (isSolid((y*W+x)*4)) { y1 = y; break; }
+  }
+  if (y0 === -1) return null;
+
+  // 2. Per-column solid count within band
+  const colN = new Array(W).fill(0);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < W; x++) if (isSolid((y*W+x)*4)) colN[x]++;
+  }
+
+  // 3. Find big gutters (cols where solid count < 2)
+  const gutters = [];
+  let inG = false, gs = 0;
+  for (let x = 0; x < W; x++) {
+    if (colN[x] < 2) { if (!inG) { inG = true; gs = x; } }
+    else if (inG)    { gutters.push([gs, x-1, x-gs]); inG = false; }
+  }
+  if (inG) gutters.push([gs, W-1, W-gs]);
+  const big = gutters.filter(g => g[2] >= 5);
+  if (big.length < 2) return null; // need at least left + right margins
+
+  // 4. Frames live BETWEEN big gutters
+  const frames = [];
+  for (let i = 0; i < big.length - 1; i++) {
+    const fx0 = big[i][1] + 1;
+    const fx1 = big[i+1][0] - 1;
+    if (fx1 - fx0 < 8) continue; // skip slivers
+    // Tight bbox within the cell
+    let cy0 = y1, cy1 = y0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = fx0; x <= fx1; x++) {
+        if (isSolid((y*W+x)*4)) { if (y < cy0) cy0 = y; if (y > cy1) cy1 = y; break; }
+      }
+    }
+    frames.push([fx0, cy0, fx1 - fx0 + 1, cy1 - cy0 + 1]);
+  }
+  return frames.length ? frames : null;
+}
+
+// drawPortrait: hot-swap source picker. If Assets/portraits.png is loaded,
+// uses that fighter's tintedPortraits; otherwise crops the head region from
+// the regular fighters.png idle row 0, frame 0 (top ~75 px of the figure).
+function drawPortrait(ctx, fighter, dx, dy, dw, dh) {
+  let sheet, sx, sy, sw, sh;
+  if (fighter.tintedPortraits && PORTRAIT_FRAMES && PORTRAIT_FRAMES.length) {
+    sheet = fighter.tintedPortraits;
+    [sx, sy, sw, sh] = PORTRAIT_FRAMES[0];
+  } else {
+    sheet = fighter.tintedSheet;
+    // Idle row 0, frame 0 head crop. The full bbox is [83, 51, 114, 213];
+    // top ~35% (75 px) is the head/shoulders — the rest is the gi/legs.
+    sx = 83; sy = 51; sw = 114; sh = 75;
+  }
+  // Letterbox-fit so the portrait keeps its aspect ratio inside the dest rect.
+  const srcRatio = sw / sh, dstRatio = dw / dh;
+  let drawW, drawH, drawX, drawY;
+  if (srcRatio > dstRatio) {
+    drawW = dw; drawH = dw / srcRatio;
+    drawX = dx; drawY = dy + (dh - drawH) / 2;
+  } else {
+    drawH = dh; drawW = dh * srcRatio;
+    drawX = dx + (dw - drawW) / 2; drawY = dy;
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sheet, sx, sy, sw, sh, drawX, drawY, drawW, drawH);
+}
+
+// =========================================================================
 // FIGHTER
 // =========================================================================
 class Fighter {
@@ -412,6 +511,7 @@ class Fighter {
     this.color = color;
     this.tintedSheet = makeTintedSheet(sheetImg, color);
     this.tintedVictory = makeTintedSheet(victoryImg, color);
+    this.tintedPortraits = portraitsSheet ? makeTintedSheet(portraitsSheet, color) : null;
     this.x = 0; this.y = 0;
     this.homeX = 0; this.homeY = 0;
     this.facing = 1;
@@ -647,6 +747,12 @@ $('startBtn').addEventListener('click', () => { startRumble().catch(e => console
 $('abortBtn').addEventListener('click', backToSetup);
 $('newRumbleBtn').addEventListener('click', backToSetup);
 
+// Skip the final-two cinematic on canvas click. We bump phaseTimer past the
+// total intro duration so the next stepPhase tick advances to walkIn.
+$('game').addEventListener('click', () => {
+  if (phase === 'finalIntro') phaseTimer = 999;
+});
+
 // =========================================================================
 // PROVABLY-FAIR: button handlers + verifier
 // =========================================================================
@@ -821,8 +927,9 @@ function tick(dt) {
   // Advance fighter animations (use scaled dt so speed slider works on anim too)
   for (const f of fighters) f.update(sdt);
 
-  // Drive battle FSM
-  stepPhase(sdt);
+  // Drive battle FSM. The final-two cinematic always plays at real-time so the
+  // banner / sfx / cuts feel cinematic regardless of the speed slider.
+  stepPhase(phase === 'finalIntro' ? dt : sdt);
 
   // Particles + shake
   updateParticles(dt);
@@ -874,11 +981,29 @@ function stepPhase(dt) {
         beatIdx: 0,
         sub: 'attack', subT: 0,
         attackInit: false,
+        introStarted: false,   // gate for one-shot finalIntro sfx
       };
       aggressor.setState('idle');
       defender.setState('idle');
-      phase = 'walkIn';
+      // When this is the last fight, run the cinematic before walk-in.
+      phase = (active.length === 2) ? 'finalIntro' : 'walkIn';
       phaseTimer = 0;
+      break;
+    }
+
+    case 'finalIntro': {
+      // Fire the stinger once, on entry.
+      if (!pair.introStarted) {
+        pair.introStarted = true;
+        playSfx('final');
+      }
+      // Always real-time (tick() feeds unscaled dt during finalIntro), so the
+      // banner / sfx / cuts feel cinematic regardless of the speed slider.
+      const totalIntro = 3.5;
+      if (phaseTimer >= totalIntro) {
+        phase = 'walkIn';
+        phaseTimer = 0;
+      }
       break;
     }
 
@@ -1073,6 +1198,137 @@ function triggerEndScreen() {
 // =========================================================================
 // RENDER
 // =========================================================================
+// Anime-style cinematic between picking the final pair and walk-in.
+// Sub-beat timeline (seconds @ 1× speed; phaseTimer is already speed-scaled):
+//   0.00–0.30  dim + radial speed lines (sfx fires once on FSM entry)
+//   0.30–1.00  full-canvas close-up of LEFT fighter (faces right toward opponent)
+//   1.00–1.70  cross-cut to RIGHT fighter (mirrored so they face left toward opponent)
+//   1.70–3.20  diagonal "FINAL BATTLE" banner swipes across (slow, readable)
+//   3.20–3.50  dim lifts; FSM advances to walkIn
+function renderFinalIntro(ctx, t) {
+  const left = pair.aggressor.homeX < pair.defender.homeX ? pair.aggressor : pair.defender;
+  const right = left === pair.aggressor ? pair.defender : pair.aggressor;
+
+  // Dim envelope: ramp up over 0–0.3, hold ~0.85 through portraits + banner, ease out at the end.
+  let dim;
+  if (t < 0.30)      dim = (t / 0.30) * 0.85;
+  else if (t < 3.20) dim = 0.85;
+  else if (t < 3.50) dim = 0.85 * (1 - (t - 3.20) / 0.30);
+  else               dim = 0;
+  ctx.fillStyle = `rgba(0,0,0,${dim})`;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Speed lines burst from center over 0–0.3s, persist faintly through close-ups.
+  if (t < 0.30) {
+    const burst = t / 0.30;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,255,255,${0.4 + 0.6 * burst})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 30; i++) {
+      const a = (i / 30) * Math.PI * 2 + Math.sin(i) * 0.2;
+      const r0 = 60 + burst * 200;
+      const r1 = r0 + 80 + (i % 3) * 40;
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_W/2 + Math.cos(a) * r0, CANVAS_H/2 + Math.sin(a) * r0);
+      ctx.lineTo(CANVAS_W/2 + Math.cos(a) * r1, CANVAS_H/2 + Math.sin(a) * r1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Close-up portraits (0.30–1.70s). Each gets ~0.7s. Animate a slight horizontal
+  // pan to fake camera movement, plus a brief slide-in from the side. The right-
+  // side fighter is mirrored so the two close-ups feel head-to-head.
+  const drawCloseup = (fighter, localT, fromLeft, flip) => {
+    // fade in over first 0.15s of this beat, hold, fade out final 0.10s
+    const beatLen = 0.70;
+    const fadeIn = Math.min(1, localT / 0.15);
+    const fadeOut = localT > beatLen - 0.10 ? Math.max(0, (beatLen - localT) / 0.10) : 1;
+    const alpha = Math.min(fadeIn, fadeOut);
+    if (alpha <= 0) return;
+
+    // Slide in from the appropriate side over the fade-in period.
+    const slideX = fromLeft ? -CANVAS_W * (1 - fadeIn) : CANVAS_W * (1 - fadeIn);
+    // Slow pan over the held portion.
+    const pan = (localT / beatLen - 0.5) * 30;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Portrait covers 90% of canvas, centered.
+    const dw = CANVAS_W * 0.9;
+    const dh = CANVAS_H * 0.9;
+    const dx = (CANVAS_W - dw) / 2 + slideX + pan;
+    const dy = (CANVAS_H - dh) / 2;
+
+    // Mirror just the portrait drawImage (not the vignette/name plate which would otherwise reverse-text).
+    if (flip) {
+      ctx.save();
+      const mirrorCx = dx + dw / 2;
+      ctx.translate(mirrorCx, 0);
+      ctx.scale(-1, 1);
+      ctx.translate(-mirrorCx, 0);
+      drawPortrait(ctx, fighter, dx, dy, dw, dh);
+      ctx.restore();
+    } else {
+      drawPortrait(ctx, fighter, dx, dy, dw, dh);
+    }
+
+    // Vignette around the close-up
+    const grad = ctx.createRadialGradient(CANVAS_W/2, CANVAS_H/2, CANVAS_W*0.25, CANVAS_W/2, CANVAS_H/2, CANVAS_W*0.65);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.85)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Name above the head (matches the regular arena label style, just bigger)
+    ctx.font = '20px "Press Start 2P", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = fighter.color === '#facc15' ? '#fff7c2' : fighter.color;
+    const ny = 44;
+    ctx.strokeText(fighter.name.toUpperCase(), CANVAS_W/2, ny);
+    ctx.fillText(fighter.name.toUpperCase(), CANVAS_W/2, ny);
+    ctx.restore();
+  };
+
+  if (t >= 0.30 && t < 1.00)      drawCloseup(left,  t - 0.30, true,  false);
+  else if (t >= 1.00 && t < 1.70) drawCloseup(right, t - 1.00, false, true);
+
+  // Diagonal "FINAL BATTLE" banner swipe (1.70–3.20s — slow so it's readable)
+  if (t >= 1.70 && t < 3.20) {
+    const bt = (t - 1.70) / 1.50; // 0..1
+    // x animates from off-screen-left to off-screen-right
+    const cx = -CANVAS_W * 0.6 + bt * CANVAS_W * 2.2;
+    const cy = CANVAS_H / 2;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((-12 * Math.PI) / 180);
+
+    // Black band
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(-CANVAS_W, -34, CANVAS_W * 2, 68);
+    // Red trim
+    ctx.fillStyle = '#b91c1c';
+    ctx.fillRect(-CANVAS_W, -36, CANVAS_W * 2, 3);
+    ctx.fillRect(-CANVAS_W, 33, CANVAS_W * 2, 3);
+
+    // Text
+    ctx.font = '32px "Press Start 2P", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#000';
+    ctx.fillStyle = '#facc15';
+    const txt = 'FINAL BATTLE';
+    ctx.strokeText(txt, 0, 4);
+    ctx.fillText(txt, 0, 4);
+    ctx.restore();
+  }
+}
+
 function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.save();
@@ -1092,6 +1348,9 @@ function render() {
 
   ctx.restore();
 
+  // Final-two cinematic overlay sits between world and HUD.
+  if (phase === 'finalIntro' && pair) renderFinalIntro(ctx, phaseTimer);
+
   // HUD (no shake)
   ctx.font = '10px "Press Start 2P", monospace';
   ctx.fillStyle = '#fff';
@@ -1102,7 +1361,7 @@ function render() {
   ctx.strokeText(hud, 10, 20);
   ctx.fillText(hud, 10, 20);
 
-  if (phase !== 'done' && pair) {
+  if (phase !== 'done' && phase !== 'finalIntro' && pair) {
     ctx.textAlign = 'center';
     const vs = `${pair.aggressor.name}  VS  ${pair.defender.name}`;
     ctx.strokeText(vs, CANVAS_W/2, 24);
@@ -1143,10 +1402,23 @@ async function boot() {
     return;
   }
 
+  // Optional: portraits.png for the final-two close-ups. Failing to load is
+  // fine — drawPortrait falls back to head crops from fighters.png.
+  try {
+    portraitsSheet = await loadImage(ASSETS.portraits);
+    PORTRAIT_FRAMES = detectStripFrames(portraitsSheet);
+    if (!PORTRAIT_FRAMES) {
+      console.warn('Could not auto-detect portrait frames; falling back to head crops.');
+      portraitsSheet = null;
+    }
+  } catch { /* optional asset; absence is fine */ }
+
   // Audio: preload mp3s (browsers won't actually play until first user gesture,
-  // which the START button satisfies).
+  // which the START button satisfies). Audio() doesn't throw on 404, so the
+  // optional final stinger just stays silent if the file is missing.
   sfx.punch  = new Audio(SFX_SRC.punch);  sfx.punch.volume  = 0.6;
   sfx.winner = new Audio(SFX_SRC.winner); sfx.winner.volume = 0.7;
+  sfx.final  = new Audio(SFX_SRC.final);  sfx.final.volume  = 0.8;
 
   // Pre-warm: prime the speed label
   speedMul = parseFloat($('speed').value);
