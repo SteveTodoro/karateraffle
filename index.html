@@ -117,7 +117,7 @@
         <div class="mt-4 grid grid-cols-2 gap-3">
           <label class="text-sm">
             <span class="pixel text-xs text-yellow-300 block mb-1">MAX FIGHTERS</span>
-            <input id="maxFighters" type="number" min="2" max="12" value="10"
+            <input id="maxFighters" type="number" min="2" max="20" value="20"
               class="w-full bg-black border border-gray-700 rounded p-2 text-center font-mono">
           </label>
           <label class="text-sm">
@@ -257,8 +257,20 @@ const FRAMES = [
 const FIGHTER_COLORS = [
   '#e63946','#1d4ed8','#16a34a','#facc15','#06b6d4',
   '#d946ef','#f97316','#7c3aed','#0ea5e9','#ec4899',
-  '#84cc16','#fb7185'
+  '#84cc16','#fb7185',
+  '#ffffff','#000000','#9ca3af','#78350f',
+  '#14b8a6','#ca8a04','#4338ca','#a21caf'
 ];
+
+// Dark fighter colors get a light label fill; very light ones get a soft
+// pastel so they don't disappear into the bright canvas. Stroke stays black.
+function labelFillFor(color) {
+  const { r, g, b } = hexToRgb(color);
+  const lum = 0.2126*r + 0.7152*g + 0.0722*b;
+  if (lum < 60)  return '#f3f4f6';
+  if (lum > 220) return '#fff7c2';
+  return color;
+}
 const ANIM_FPS = 8;
 const CANVAS_W = 800, CANVAS_H = 500;
 
@@ -283,6 +295,7 @@ let phase = 'idle';
 let phaseTimer = 0;
 let pair = null;              // { aggressor, defender, beats, beatIdx, sub: 'attack'|'react'|'cool', subT }
 let predeterminedWinner = null;
+let benched = [];             // names that were drawn but didn't make the bracket cut
 
 // Provably-fair state. The server seed is generated up front (before any names
 // are loaded) and its sha256 is published as `commit`. At rumble start we mix
@@ -592,7 +605,7 @@ class Fighter {
       ctx.textAlign = 'center';
       ctx.lineWidth = 4;
       ctx.strokeStyle = '#000';
-      ctx.fillStyle = this.color === '#facc15' ? '#fff7c2' : this.color;
+      ctx.fillStyle = labelFillFor(this.color);
       const ly = this.y - dh - 8;
       ctx.strokeText(this.name, this.x, ly);
       ctx.fillText(this.name, this.x, ly);
@@ -750,7 +763,7 @@ $('newRumbleBtn').addEventListener('click', backToSetup);
 // Skip the final-two cinematic on canvas click. We bump phaseTimer past the
 // total intro duration so the next stepPhase tick advances to walkIn.
 $('game').addEventListener('click', () => {
-  if (phase === 'finalIntro') phaseTimer = 999;
+  if (phase === 'finalIntro' || phase === 'benched') phaseTimer = 999;
 });
 
 // =========================================================================
@@ -859,7 +872,7 @@ async function backToSetup() {
 // =========================================================================
 async function startRumble() {
   if (names.length < 2) return;
-  const maxF = Math.max(2, Math.min(12, parseInt($('maxFighters').value, 10) || 10));
+  const maxF = Math.max(2, Math.min(20, parseInt($('maxFighters').value, 10) || 10));
 
   // Provably-fair seed derivation. Mix the secret serverSeed with publicly
   // observable values (timestamp, roster, maxFighters) and hash. The first
@@ -871,7 +884,10 @@ async function startRumble() {
   rng   = mulberry32(seedFromHex(combined));
   proof = { version: 1, serverSeed, commit, timestamp, roster: [...names], maxFighters: maxF, winnerName: null };
 
-  const pool = shuffle([...names]).slice(0, Math.min(maxF, names.length));
+  const shuffled = shuffle([...names]);
+  const cut = Math.min(maxF, shuffled.length);
+  const pool = shuffled.slice(0, cut);
+  benched = shuffled.slice(cut);
 
   // Pick distinct colors for each fighter
   const colorPool = shuffle([...FIGHTER_COLORS]);
@@ -893,7 +909,7 @@ async function startRumble() {
   particles = [];
   screenShake = 0;
   pair = null;
-  phase = 'pickPair';
+  phase = benched.length > 0 ? 'benched' : 'pickPair';
   phaseTimer = 0;
 
   $('setup').classList.add('hidden');
@@ -927,9 +943,9 @@ function tick(dt) {
   // Advance fighter animations (use scaled dt so speed slider works on anim too)
   for (const f of fighters) f.update(sdt);
 
-  // Drive battle FSM. The final-two cinematic always plays at real-time so the
-  // banner / sfx / cuts feel cinematic regardless of the speed slider.
-  stepPhase(phase === 'finalIntro' ? dt : sdt);
+  // Drive battle FSM. Cinematic phases (final-two intro, benched-roster card)
+  // play at real-time so they don't speed up with the speed slider.
+  stepPhase((phase === 'finalIntro' || phase === 'benched') ? dt : sdt);
 
   // Particles + shake
   updateParticles(dt);
@@ -942,10 +958,21 @@ function tick(dt) {
 // =========================================================================
 // BATTLE FSM
 // =========================================================================
+// Total real-time duration of the benched-roster intro card.
+const BENCHED_DURATION = 2.8;
+
 function stepPhase(dt) {
   phaseTimer += dt;
 
   switch (phase) {
+    case 'benched': {
+      if (phaseTimer >= BENCHED_DURATION) {
+        phase = 'pickPair';
+        phaseTimer = 0;
+      }
+      break;
+    }
+
     case 'pickPair': {
       if (active.length <= 1) {
         phase = 'done';
@@ -1286,7 +1313,7 @@ function renderFinalIntro(ctx, t) {
     ctx.textBaseline = 'alphabetic';
     ctx.lineWidth = 6;
     ctx.strokeStyle = '#000';
-    ctx.fillStyle = fighter.color === '#facc15' ? '#fff7c2' : fighter.color;
+    ctx.fillStyle = labelFillFor(fighter.color);
     const ny = 44;
     ctx.strokeText(fighter.name.toUpperCase(), CANVAS_W/2, ny);
     ctx.fillText(fighter.name.toUpperCase(), CANVAS_W/2, ny);
@@ -1329,6 +1356,109 @@ function renderFinalIntro(ctx, t) {
   }
 }
 
+// "Didn't make the cut" intro — names that were drawn but bumped from the
+// bracket. Plays once at the start of any rumble where roster > maxFighters.
+// Real-time. Click anywhere on the canvas to skip (handled in click listener).
+function renderBenched(ctx, t) {
+  const total = BENCHED_DURATION;
+  const fadeIn = 0.25, fadeOut = 0.30;
+  let alpha;
+  if (t < fadeIn)             alpha = t / fadeIn;
+  else if (t < total - fadeOut) alpha = 1;
+  else                          alpha = Math.max(0, (total - t) / fadeOut);
+  if (alpha <= 0) return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Dim the arena underneath so the card reads cleanly.
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Header
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#000';
+  ctx.font = '22px "Press Start 2P", monospace';
+  ctx.fillStyle = '#f87171';
+  const header = "DIDN'T MAKE THE CUT";
+  ctx.strokeText(header, CANVAS_W / 2, 90);
+  ctx.fillText(header, CANVAS_W / 2, 90);
+
+  // Subhead with count
+  ctx.font = '10px "Press Start 2P", monospace';
+  ctx.fillStyle = '#9ca3af';
+  const sub = `${benched.length} bumped from the bracket`;
+  ctx.strokeText(sub, CANVAS_W / 2, 112);
+  ctx.fillText(sub, CANVAS_W / 2, 112);
+
+  // Names: cap visible to fit the canvas; show "+N more" if exceeded.
+  const VISIBLE_MAX = 16;
+  const overflow = Math.max(0, benched.length - VISIBLE_MAX);
+  const shown = benched.slice(0, VISIBLE_MAX);
+  const cols = shown.length > 6 ? 2 : 1;
+  const rows = Math.ceil(shown.length / cols);
+  const lineH = 22;
+  const colW = 320;
+  const startY = 160;
+  const baseX = CANVAS_W / 2 - ((cols - 1) * colW) / 2;
+
+  ctx.font = '12px "Press Start 2P", monospace';
+  ctx.lineWidth = 4;
+
+  // Cascade names in over the first ~0.8s of the hold so the list feels
+  // populated rather than dumped. Past that, they're all fully visible.
+  const cascade = 0.06;
+  shown.forEach((name, i) => {
+    const appearAt = fadeIn + i * cascade;
+    if (t < appearAt) return;
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = baseX + (col - (cols - 1) / 2) * colW;
+    const y = startY + row * lineH;
+
+    ctx.fillStyle = '#fef3c7';
+    ctx.strokeText(name, x, y);
+    ctx.fillText(name, x, y);
+
+    // Strikethrough for visual humor.
+    const w = ctx.measureText(name).width;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2 - 2, y - 5);
+    ctx.lineTo(x + w / 2 + 2, y - 5);
+    ctx.stroke();
+    ctx.strokeStyle = '#dc2626';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2 - 2, y - 5);
+    ctx.lineTo(x + w / 2 + 2, y - 5);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 4;
+  });
+
+  if (overflow > 0) {
+    const y = startY + rows * lineH + 4;
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px "Press Start 2P", monospace';
+    ctx.strokeText(`+${overflow} MORE`, CANVAS_W / 2, y);
+    ctx.fillText(`+${overflow} MORE`, CANVAS_W / 2, y);
+  }
+
+  // Skip hint
+  ctx.font = '8px "Press Start 2P", monospace';
+  ctx.fillStyle = '#6b7280';
+  const hint = 'CLICK TO SKIP';
+  ctx.strokeText(hint, CANVAS_W / 2, CANVAS_H - 20);
+  ctx.fillText(hint, CANVAS_W / 2, CANVAS_H - 20);
+
+  ctx.restore();
+}
+
 function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.save();
@@ -1348,25 +1478,26 @@ function render() {
 
   ctx.restore();
 
-  // Final-two cinematic overlay sits between world and HUD.
+  // Cinematic overlays sit between world and HUD.
+  if (phase === 'benched' && benched.length > 0) renderBenched(ctx, phaseTimer);
   if (phase === 'finalIntro' && pair) renderFinalIntro(ctx, phaseTimer);
 
   // HUD (no shake)
-  ctx.font = '10px "Press Start 2P", monospace';
+  ctx.font = '16px "Press Start 2P", monospace';
   ctx.fillStyle = '#fff';
   ctx.strokeStyle = '#000';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 5;
   ctx.textAlign = 'left';
   const hud = `FIGHTERS: ${active.length}/${fighters.length}`;
-  ctx.strokeText(hud, 10, 20);
-  ctx.fillText(hud, 10, 20);
+  ctx.strokeText(hud, 12, 30);
+  ctx.fillText(hud, 12, 30);
 
   if (phase !== 'done' && phase !== 'finalIntro' && pair) {
     ctx.textAlign = 'center';
     const vs = `${pair.aggressor.name}  VS  ${pair.defender.name}`;
-    ctx.strokeText(vs, CANVAS_W/2, 24);
+    ctx.strokeText(vs, CANVAS_W/2, 30);
     ctx.fillStyle = '#facc15';
-    ctx.fillText(vs, CANVAS_W/2, 24);
+    ctx.fillText(vs, CANVAS_W/2, 30);
   }
 }
 
