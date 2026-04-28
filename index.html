@@ -129,6 +129,33 @@
       START ROYAL RUMBLE
     </button>
     <p id="setupStatus" class="text-xs text-gray-500 mt-2 text-center">Add at least 2 contestants to begin.</p>
+
+    <!-- ============== PROVABLY FAIR PANEL ============== -->
+    <div class="mt-6 border-t border-gray-700 pt-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="pixel text-xs text-yellow-300">PROVABLY FAIR</span>
+        <span class="text-[10px] text-gray-500">share the commit before the draw &middot; reveal verifies the result</span>
+      </div>
+      <p class="text-xs text-gray-400 mb-2">Share this commit hash with participants <em>before</em> adding names. After the rumble, the seed is revealed so anyone can verify the winner was determined by it.</p>
+      <div class="bg-black border border-gray-700 rounded p-2 font-mono text-[11px] break-all" id="commitHash">…generating…</div>
+      <div class="mt-2 flex gap-2 flex-wrap">
+        <button id="copyCommitBtn" class="px-3 py-1 bg-blue-700 hover:bg-blue-600 rounded text-xs">📋 Copy commit</button>
+        <button id="newSeedBtn"   class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs">🔄 New seed</button>
+        <span id="seedStatus" class="text-xs text-gray-500 self-center"></span>
+      </div>
+    </div>
+
+    <!-- ============== VERIFY PAST RAFFLE ============== -->
+    <details class="mt-4 border-t border-gray-700 pt-4">
+      <summary class="pixel text-xs text-yellow-300 cursor-pointer">VERIFY A PAST RAFFLE</summary>
+      <p class="text-xs text-gray-400 mt-2 mb-2">Paste the proof JSON published by a previous rumble. The page will recompute the commit hash and replay the deterministic draw to confirm the announced winner.</p>
+      <textarea id="verifyInput" rows="6" placeholder='{ "version":1, "serverSeed":"...", "commit":"...", ... }'
+        class="w-full bg-black text-green-300 p-2 rounded border border-gray-700 font-mono text-xs"></textarea>
+      <div class="mt-2 flex gap-2 flex-wrap items-center">
+        <button id="verifyBtn" class="px-3 py-1 bg-green-700 hover:bg-green-600 rounded text-xs">Verify</button>
+        <span id="verifyResult" class="text-xs"></span>
+      </div>
+    </details>
   </section>
 
   <!-- =========================== ARENA =========================== -->
@@ -138,6 +165,17 @@
       <div id="endScreen" class="hidden">
         <div class="winner-banner">WINNER!</div>
         <div id="winnerName" class="winner-name"></div>
+        <details class="mt-2 bg-black/60 border border-yellow-600 rounded text-left text-[11px] font-mono px-3 py-2 max-w-[640px] w-[92%]">
+          <summary class="pixel text-[10px] text-yellow-300 cursor-pointer">REVEAL &amp; PROOF</summary>
+          <div class="mt-2 space-y-1 break-all">
+            <div><span class="text-gray-400">seed:</span> <span id="revealSeed"></span></div>
+            <div><span class="text-gray-400">commit:</span> <span id="revealCommit"></span></div>
+            <div><span class="text-gray-400">timestamp:</span> <span id="revealTimestamp"></span></div>
+          </div>
+          <textarea id="revealJson" readonly rows="7"
+            class="mt-2 w-full bg-black border border-gray-700 rounded p-2 text-green-300 text-[11px]"></textarea>
+          <button id="copyProofBtn" class="mt-2 px-3 py-1 bg-blue-700 hover:bg-blue-600 rounded text-xs">📋 Copy proof JSON</button>
+        </details>
         <button id="newRumbleBtn" class="pixel px-6 py-3 bg-green-600 hover:bg-green-500 rounded text-yellow-300 mt-4"
           style="text-shadow: 2px 2px 0 #000;">NEW RUMBLE</button>
       </div>
@@ -228,16 +266,58 @@ let phaseTimer = 0;
 let pair = null;              // { aggressor, defender, beats, beatIdx, sub: 'attack'|'react'|'cool', subT }
 let predeterminedWinner = null;
 
+// Provably-fair state. The server seed is generated up front (before any names
+// are loaded) and its sha256 is published as `commit`. At rumble start we mix
+// the secret seed with the timestamp + roster + maxFighters to derive the
+// deterministic PRNG seed. Revealing serverSeed at the end lets anyone verify.
+let serverSeed = null;
+let commit     = null;
+let proof      = null;
+
 // =========================================================================
 // UTIL
 // =========================================================================
-const rand = (a,b) => a + Math.random() * (b - a);
-const randInt = (n) => Math.floor(Math.random() * n);
+// All gameplay randomness goes through `rng()`. During a rumble it's a
+// mulberry32 PRNG seeded from the proof hash; outside a rumble it falls back
+// to Math.random so setup-screen cosmetics don't burn deterministic state.
+let rng = Math.random;
+const rand = (a,b) => a + rng() * (b - a);
+const randInt = (n) => Math.floor(rng() * n);
 const pick = (arr) => arr[randInt(arr.length)];
 function shuffle(a) { for (let i=a.length-1; i>0; i--) { const j=randInt(i+1); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 function hexToRgb(hex) {
   const m = hex.replace('#','').match(/.{2}/g);
   return { r: parseInt(m[0],16), g: parseInt(m[1],16), b: parseInt(m[2],16) };
+}
+
+// =========================================================================
+// CRYPTO + PRNG (provably-fair raffle)
+// =========================================================================
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function genServerSeed() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return [...bytes].map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const seedFromHex = (h) => parseInt(h.slice(0, 8), 16);
+
+async function regenerateSeed() {
+  serverSeed = genServerSeed();
+  commit     = await sha256Hex(serverSeed);
+  const el = document.getElementById('commitHash');
+  if (el) el.textContent = commit;
 }
 
 // =========================================================================
@@ -553,14 +633,106 @@ $('speed').addEventListener('input', (e) => {
 $('scanlines').addEventListener('change', (e) => {
   document.getElementById('arenaWrap').classList.toggle('scanlines', e.target.checked);
 });
-$('startBtn').addEventListener('click', startRumble);
+$('startBtn').addEventListener('click', () => { startRumble().catch(e => console.error(e)); });
 $('abortBtn').addEventListener('click', backToSetup);
 $('newRumbleBtn').addEventListener('click', backToSetup);
 
-function backToSetup() {
+// =========================================================================
+// PROVABLY-FAIR: button handlers + verifier
+// =========================================================================
+function flashSeedStatus(msg, ok = true) {
+  const el = $('seedStatus');
+  el.textContent = msg;
+  el.className = 'text-xs self-center ' + (ok ? 'text-green-400' : 'text-red-400');
+  setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 2500);
+}
+
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch { return false; }
+}
+
+$('copyCommitBtn').addEventListener('click', async () => {
+  if (!commit) return;
+  const ok = await copyToClipboard(commit);
+  flashSeedStatus(ok ? 'Commit copied!' : 'Copy failed', ok);
+});
+
+$('newSeedBtn').addEventListener('click', async () => {
+  await regenerateSeed();
+  flashSeedStatus('New commit generated. (Old commit is no longer valid.)');
+});
+
+$('copyProofBtn')?.addEventListener('click', async () => {
+  const text = $('revealJson').value;
+  if (!text) return;
+  const ok = await copyToClipboard(text);
+  const btn = $('copyProofBtn');
+  const orig = btn.textContent;
+  btn.textContent = ok ? '✓ Copied!' : '✗ Failed';
+  setTimeout(() => { btn.textContent = orig; }, 1800);
+});
+
+// Pure verifier — replays the deterministic part of startRumble (subset shuffle
+// → color shuffle → winner pick) WITHOUT touching the DOM, audio, or canvas.
+// CRITICAL: the order of rng calls here MUST match startRumble exactly.
+async function verifyProof(proofText) {
+  let p;
+  try { p = JSON.parse(proofText); } catch (e) { return { ok: false, reason: 'invalid JSON: ' + e.message }; }
+  if (!p || typeof p !== 'object') return { ok: false, reason: 'not an object' };
+  for (const k of ['serverSeed','commit','timestamp','roster','maxFighters','winnerName']) {
+    if (!(k in p)) return { ok: false, reason: 'missing field: ' + k };
+  }
+
+  const reCommit = await sha256Hex(p.serverSeed);
+  if (reCommit !== p.commit) return { ok: false, reason: `commit-hash mismatch (sha256 of seed = ${reCommit.slice(0,16)}…, claimed commit = ${p.commit.slice(0,16)}…)` };
+
+  const combined = await sha256Hex(`${p.serverSeed}|${p.timestamp}|${JSON.stringify(p.roster)}|${p.maxFighters}`);
+  const r = mulberry32(seedFromHex(combined));
+
+  // Replay subset shuffle (must match startRumble: shuffle then slice)
+  const pool = [...p.roster];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  const subset = pool.slice(0, Math.min(p.maxFighters, pool.length));
+
+  // Replay color shuffle (consumes RNG state — must run even though it doesn't affect winner)
+  const colors = [...FIGHTER_COLORS];
+  for (let i = colors.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [colors[i], colors[j]] = [colors[j], colors[i]];
+  }
+
+  const winnerIdx = Math.floor(r() * subset.length);
+  const expected  = subset[winnerIdx];
+  if (expected !== p.winnerName) {
+    return { ok: false, reason: `winner mismatch (algorithm picks "${expected}", proof claims "${p.winnerName}")` };
+  }
+  return { ok: true, winner: p.winnerName, commitHash: p.commit };
+}
+
+$('verifyBtn').addEventListener('click', async () => {
+  const out = $('verifyResult');
+  out.textContent = 'verifying…';
+  out.className = 'text-xs text-gray-400';
+  const result = await verifyProof($('verifyInput').value.trim());
+  if (result.ok) {
+    out.textContent = `✓ VERIFIED — winner: ${result.winner}`;
+    out.className = 'text-xs text-green-400 font-bold';
+  } else {
+    out.textContent = `✗ INVALID — ${result.reason}`;
+    out.className = 'text-xs text-red-400 font-bold';
+  }
+});
+
+async function backToSetup() {
   runId++;          // invalidate any running loop
   runningLoop = false;
   stopWinnerSfx();
+  rng = Math.random;       // burn the just-revealed PRNG state
+  await regenerateSeed();  // fresh commit for the next rumble
   $('arena').classList.add('hidden');
   $('endScreen').classList.add('hidden');
   $('setup').classList.remove('hidden');
@@ -569,9 +741,20 @@ function backToSetup() {
 // =========================================================================
 // RUMBLE INITIALIZATION
 // =========================================================================
-function startRumble() {
+async function startRumble() {
   if (names.length < 2) return;
   const maxF = Math.max(2, Math.min(12, parseInt($('maxFighters').value, 10) || 10));
+
+  // Provably-fair seed derivation. Mix the secret serverSeed with publicly
+  // observable values (timestamp, roster, maxFighters) and hash. The first
+  // 32 bits seed mulberry32 — every randInt/shuffle/rng() call from here on
+  // is deterministic given (serverSeed, timestamp, names, maxF).
+  const timestamp   = new Date().toISOString();
+  const rosterCanon = JSON.stringify(names);
+  const combined    = await sha256Hex(`${serverSeed}|${timestamp}|${rosterCanon}|${maxF}`);
+  rng   = mulberry32(seedFromHex(combined));
+  proof = { version: 1, serverSeed, commit, timestamp, roster: [...names], maxFighters: maxF, winnerName: null };
+
   const pool = shuffle([...names]).slice(0, Math.min(maxF, names.length));
 
   // Pick distinct colors for each fighter
@@ -587,7 +770,7 @@ function startRumble() {
   });
   active = [...fighters];
 
-  // Predetermine the raffle winner (fair random pick).
+  // Predetermine the raffle winner (deterministic from seed).
   predeterminedWinner = active[randInt(active.length)];
   predeterminedWinner.isWinner = true;
 
@@ -661,7 +844,7 @@ function stepPhase(dt) {
       let aggressor, defender;
       if (a.isWinner)      { aggressor = a; defender = b; }
       else if (b.isWinner) { aggressor = b; defender = a; }
-      else                 { if (Math.random() < 0.5) { aggressor = a; defender = b; } else { aggressor = b; defender = a; } }
+      else                 { if (rng() < 0.5) { aggressor = a; defender = b; } else { aggressor = b; defender = a; } }
 
       // Position the fighters on either side of center for the duel.
       const left  = { x: CANVAS_W/2 - 38, y: 410 };
@@ -728,10 +911,10 @@ function stepPhase(dt) {
         if (!pair.attackInit) {
           pair.attackInit = true;
           const isLastBeat = pair.beatIdx === pair.beats - 1;
-          const counter = !isLastBeat && Math.random() < 0.35;
+          const counter = !isLastBeat && rng() < 0.35;
           const attacker = counter ? defender : aggressor;
           const target   = counter ? aggressor : defender;
-          const move = Math.random() < 0.5 ? 'punch' : 'kick';
+          const move = rng() < 0.5 ? 'punch' : 'kick';
           attacker._lastMove = move;
           attacker.setState(move);
           target.setState('idle');
@@ -866,6 +1049,15 @@ function triggerEndScreen() {
   $('winnerName').textContent = w.name.toUpperCase();
   $('endScreen').classList.remove('hidden');
   playSfx('winner');
+
+  // Finalize and reveal the proof — server seed is no longer secret once the winner is known.
+  if (proof) {
+    proof.winnerName = w.name;
+    $('revealSeed').textContent      = proof.serverSeed;
+    $('revealCommit').textContent    = proof.commit;
+    $('revealTimestamp').textContent = proof.timestamp;
+    $('revealJson').value            = JSON.stringify(proof, null, 2);
+  }
 }
 
 // =========================================================================
@@ -950,6 +1142,7 @@ async function boot() {
   speedMul = parseFloat($('speed').value);
   $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
 
+  await regenerateSeed();  // initial commit ready before host adds names
   renderRoster();
 }
 boot();
