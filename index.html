@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Royal Rumble Raffle</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root { --pixel-font: 'Press Start 2P', ui-monospace, monospace; }
+  body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .pixel { font-family: var(--pixel-font); letter-spacing: 1px; }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #000;
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  #arenaWrap { position: relative; max-width: 800px; margin: 0 auto; }
+  #arenaWrap.scanlines::after {
+    content: "";
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(to bottom,
+      rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.28) 2px, rgba(0,0,0,0.28) 3px);
+    mix-blend-mode: multiply;
+  }
+  #endScreen {
+    position: absolute; inset: 0;
+    display: flex; align-items: center;
+    flex-direction: column; gap: 0.75rem;
+    background: rgba(0,0,0,0.25);
+    pointer-events: auto;
+    text-align: center; padding: 1rem;
+  }
+  #endScreen #newRumbleBtn { margin-top: auto; }
+  #endScreen.hidden { display: none; }
+  .winner-banner {
+    font-family: var(--pixel-font);
+    color: #facc15;
+    text-shadow: 4px 4px 0 #b91c1c, 8px 8px 0 #000;
+    font-size: clamp(28px, 6vw, 56px);
+    animation: pulse 0.55s infinite alternate;
+  }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.07); } }
+  .winner-name {
+    font-family: var(--pixel-font);
+    color: #fff;
+    text-shadow: 2px 2px 0 #000;
+    font-size: clamp(16px, 3vw, 28px);
+  }
+  .name-chip {
+    background: #1f2937;
+    border: 1px solid #374151;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-family: ui-monospace, monospace;
+    color: #d1d5db;
+  }
+  .name-chip button {
+    color: #f87171;
+    font-weight: bold;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .name-chip button:hover { color: #fca5a5; }
+  input[type=range] { accent-color: #facc15; }
+</style>
+</head>
+<body class="min-h-screen p-4 sm:p-8">
+
+<div class="max-w-5xl mx-auto">
+  <h1 class="pixel text-2xl sm:text-4xl text-yellow-300 mb-2" style="text-shadow: 3px 3px 0 #b91c1c;">ROYAL RUMBLE RAFFLE</h1>
+  <p class="text-sm text-gray-400 mb-6">A pixel-art elimination raffle. Last fighter standing wins.</p>
+
+  <!-- =========================== SETUP =========================== -->
+  <section id="setup" class="bg-gray-900 border-2 border-yellow-500 rounded-lg p-4 sm:p-6 shadow-xl">
+    <div class="grid md:grid-cols-2 gap-6">
+      <div>
+        <label class="pixel text-xs text-yellow-300 block mb-2">CONTESTANT NAMES (one per line)</label>
+        <textarea id="namesInput" rows="10"
+          class="w-full bg-black text-green-300 p-3 rounded border border-gray-700 font-mono text-sm focus:outline-none focus:border-yellow-500"
+          placeholder="Akira&#10;Bruce&#10;Chun-Li&#10;Daisuke&#10;Eiko"></textarea>
+        <div class="mt-3 flex gap-2 flex-wrap">
+          <button id="loadBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold">Load Contestants</button>
+          <button id="clearBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Clear All</button>
+        </div>
+      </div>
+
+      <div>
+        <label class="pixel text-xs text-yellow-300 block mb-2">ROSTER (<span id="rosterCount">0</span>)</label>
+        <div id="nameList" class="bg-black border border-gray-700 rounded p-3 min-h-[200px] max-h-[260px] overflow-auto flex flex-wrap gap-2 content-start"></div>
+
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <label class="text-sm">
+            <span class="pixel text-xs text-yellow-300 block mb-1">MAX FIGHTERS</span>
+            <input id="maxFighters" type="number" min="2" max="12" value="10"
+              class="w-full bg-black border border-gray-700 rounded p-2 text-center font-mono">
+          </label>
+          <label class="text-sm">
+            <span class="pixel text-xs text-yellow-300 block mb-1">SPEED <span id="speedLabel">1.0x</span></span>
+            <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" class="w-full mt-2">
+          </label>
+        </div>
+
+        <label class="mt-3 flex items-center gap-2 text-sm">
+          <input id="scanlines" type="checkbox" checked class="w-4 h-4">
+          <span>CRT scanlines overlay</span>
+        </label>
+      </div>
+    </div>
+
+    <button id="startBtn" disabled
+      class="pixel mt-6 w-full py-4 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded text-base sm:text-xl text-yellow-300"
+      style="text-shadow: 2px 2px 0 #000;">
+      START ROYAL RUMBLE
+    </button>
+    <p id="setupStatus" class="text-xs text-gray-500 mt-2 text-center">Add at least 2 contestants to begin.</p>
+  </section>
+
+  <!-- =========================== ARENA =========================== -->
+  <section id="arena" class="hidden mt-4">
+    <div id="arenaWrap" class="scanlines">
+      <canvas id="game" width="800" height="500"></canvas>
+      <div id="endScreen" class="hidden">
+        <div class="winner-banner">WINNER!</div>
+        <div id="winnerName" class="winner-name"></div>
+        <button id="newRumbleBtn" class="pixel px-6 py-3 bg-green-600 hover:bg-green-500 rounded text-yellow-300 mt-4"
+          style="text-shadow: 2px 2px 0 #000;">NEW RUMBLE</button>
+      </div>
+    </div>
+    <div class="text-center mt-3">
+      <button id="abortBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">Back to Setup</button>
+    </div>
+  </section>
+</div>
+
+<script>
+'use strict';
+
+// =========================================================================
+// CONSTANTS
+// =========================================================================
+const ASSETS = {
+  sheet:   'Assets/fighters.png',
+  bg:      'Assets/backgrouns.png', // typo preserved per project asset filename
+  victory: 'Assets/victory.png',
+};
+const SFX_SRC = {
+  punch:  'sounds/punch.mp3',
+  winner: 'sounds/winner.mp3',
+};
+const SHEET_W = 1248, SHEET_H = 1248;
+const COLS = 5, ROWS = 5;
+const SCALE = 0.34;
+// Victory frames include the raised arm above the head, so their bbox is ~396px
+// tall vs ~213px for idle. Use a smaller scale so the BODY draws at roughly the
+// same size as a normal fighter (raised fist still extends naturally above).
+const SCALE_VICTORY = 0.22;
+const STATE_ROWS = { idle: 0, punch: 1, kick: 2, hit: 3, knockout: 4 };
+
+// Victory sheet (Assets/victory.png, 1248×1248) — single row of 5 frames showing
+// the fighter raising their arm. Anchored on legs/torso so the body stays planted
+// while the fist rises above the head.
+const VICTORY_FRAMES = [
+  [57,372,169,396,37],
+  [296,372,192,396,36],
+  [540,372,177,396,37],
+  [784,372,174,396,36],
+  [1019,372,164,396,36],
+];
+
+// Per-frame source rectangles + body anchor x (relative to rect left), measured
+// from the actual sprite content. The sheet is NOT a uniform grid — frame widths
+// vary per pose (punch/kick stretch wider) and the knockout row is half-height.
+// Each entry: [sx, sy, sw, sh, anchorX]. anchorX marks where the figure's torso
+// sits within the rect, so the body stays put in screen space across frames.
+const FRAMES = [
+  // idle
+  [[83,51,114,213,55],[292,51,114,213,51],[506,51,124,213,57],[724,51,127,213,53],[939,51,116,213,53]],
+  // punch
+  [[75,295,117,213,47],[284,295,152,213,71],[494,295,185,213,76],[715,295,203,213,91],[970,295,117,213,57]],
+  // kick
+  [[75,533,113,212,35],[296,533,116,212,38],[522,533,191,212,35],[753,533,130,212,43],[968,533,117,212,47]],
+  // hit
+  [[64,774,166,198,25],[286,774,163,198,28],[523,774,166,198,20],[762,774,151,198,30],[984,774,117,198,58]],
+  // knockout (figure lies horizontal — anchor is rect center)
+  [[80,1027,175,120,87],[291,1027,200,120,100],[527,1027,207,120,103],[758,1027,212,120,106],[998,1027,210,120,105]],
+];
+const FIGHTER_COLORS = [
+  '#e63946','#1d4ed8','#16a34a','#facc15','#06b6d4',
+  '#d946ef','#f97316','#7c3aed','#0ea5e9','#ec4899',
+  '#84cc16','#fb7185'
+];
+const ANIM_FPS = 8;
+const CANVAS_W = 800, CANVAS_H = 500;
+
+// =========================================================================
+// GLOBAL STATE
+// =========================================================================
+let names = [];               // current roster from setup
+let sheetImg = null, bgImg = null, victoryImg = null;
+const sfx = {}; // populated in boot()
+let canvas, ctx;
+let fighters = [];            // active + downed Fighter objects
+let active = [];              // alive subset (references into fighters)
+let particles = [];
+let screenShake = 0;
+let speedMul = 1;
+let runId = 0;                // increments per rumble to invalidate stale rAF state
+let runningLoop = false;
+let lastT = 0;
+let phase = 'idle';
+let phaseTimer = 0;
+let pair = null;              // { aggressor, defender, beats, beatIdx, sub: 'attack'|'react'|'cool', subT }
+let predeterminedWinner = null;
+
+// =========================================================================
+// UTIL
+// =========================================================================
+const rand = (a,b) => a + Math.random() * (b - a);
+const randInt = (n) => Math.floor(Math.random() * n);
+const pick = (arr) => arr[randInt(arr.length)];
+function shuffle(a) { for (let i=a.length-1; i>0; i--) { const j=randInt(i+1); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+function hexToRgb(hex) {
+  const m = hex.replace('#','').match(/.{2}/g);
+  return { r: parseInt(m[0],16), g: parseInt(m[1],16), b: parseInt(m[2],16) };
+}
+
+// =========================================================================
+// ASSET LOADING
+// =========================================================================
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load ' + src));
+    img.src = src;
+  });
+}
+
+// Punches play often, so we clone per-call to allow overlapping triggers.
+// The winner cue is single-shot and longer, so we play the original instance
+// to allow stopping it cleanly when the user returns to setup mid-fanfare.
+function playSfx(name) {
+  const src = sfx[name];
+  if (!src) return;
+  if (name === 'winner') {
+    src.currentTime = 0;
+    src.play().catch(() => {});
+    return;
+  }
+  const a = src.cloneNode();
+  a.volume = src.volume;
+  a.play().catch(() => {});
+}
+
+function stopWinnerSfx() {
+  if (sfx.winner) { sfx.winner.pause(); sfx.winner.currentTime = 0; }
+}
+
+// =========================================================================
+// TINTED SPRITE CACHE (per-pixel gi recolor)
+// Replaces near-white pixels in the sprite sheet with the fighter's color,
+// preserving the red belt, hair, and skin tones. Falls back to untinted
+// sheet if the canvas is tainted (e.g. running from file:// in some browsers).
+// =========================================================================
+let canvasTaintedWarned = false;
+function makeTintedSheet(sourceImg, color) {
+  const W = sourceImg.naturalWidth, H = sourceImg.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const cx = c.getContext('2d');
+  cx.drawImage(sourceImg, 0, 0);
+
+  let imgData;
+  try {
+    imgData = cx.getImageData(0, 0, W, H);
+  } catch (e) {
+    if (!canvasTaintedWarned) {
+      canvasTaintedWarned = true;
+      console.warn('Per-pixel tint unavailable (canvas tainted). Run via local server, e.g. `python3 -m http.server`, for color variation.');
+    }
+    return c;
+  }
+
+  const tgt = hexToRgb(color);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i+3];
+    if (a === 0) continue;
+    const r = d[i], g = d[i+1], b = d[i+2];
+    if (r > 220 && g > 220 && b > 220) {
+      d[i]   = tgt.r;
+      d[i+1] = tgt.g;
+      d[i+2] = tgt.b;
+    }
+  }
+  cx.putImageData(imgData, 0, 0);
+  return c;
+}
+
+// =========================================================================
+// FIGHTER
+// =========================================================================
+class Fighter {
+  constructor(name, color) {
+    this.name = name;
+    this.color = color;
+    this.tintedSheet = makeTintedSheet(sheetImg, color);
+    this.tintedVictory = makeTintedSheet(victoryImg, color);
+    this.x = 0; this.y = 0;
+    this.homeX = 0; this.homeY = 0;
+    this.facing = 1;
+    this.state = 'idle';
+    this.frame = 0;
+    this.frameTimer = 0;
+    this.health = 3;
+    this.isWinner = false;
+    this.alive = true;
+    this.animDone = false;
+    this.victoryDir = 1; // for ping-pong celebration loop
+  }
+
+  setState(s) {
+    if (this.state === s) return;
+    this.state = s;
+    this.frame = 0;
+    this.frameTimer = 0;
+    this.animDone = false;
+  }
+
+  update(dt) {
+    this.frameTimer += dt;
+    // Victory anim runs slower for a more triumphant cadence
+    const frameDur = (this.state === 'victory') ? 1 / 5 : 1 / ANIM_FPS;
+    while (this.frameTimer >= frameDur) {
+      this.frameTimer -= frameDur;
+      const last = COLS - 1;
+      if (this.state === 'idle') {
+        this.frame = (this.frame + 1) % COLS;
+      } else if (this.state === 'victory') {
+        // First pass 0→4 (raise the arm), then ping-pong 3↔4 forever (fist pump)
+        if (!this.animDone) {
+          if (this.frame < last) this.frame++;
+          else { this.animDone = true; this.victoryDir = -1; }
+        } else {
+          this.frame += this.victoryDir;
+          if (this.frame <= 3) { this.frame = 3; this.victoryDir = 1; }
+          if (this.frame >= 4) { this.frame = 4; this.victoryDir = -1; }
+        }
+      } else if (this.state === 'knockout') {
+        if (this.frame < last) this.frame++;
+        else this.animDone = true;
+      } else {
+        if (this.frame < last) this.frame++;
+        else this.animDone = true;
+      }
+    }
+  }
+
+  draw(ctx) {
+    let sheet, lut, scale;
+    if (this.state === 'victory') {
+      sheet = this.tintedVictory;
+      lut = VICTORY_FRAMES[this.frame];
+      scale = SCALE_VICTORY;
+    } else {
+      sheet = this.tintedSheet;
+      const row = STATE_ROWS[this.state] ?? 0;
+      lut = FRAMES[row][this.frame];
+      scale = SCALE;
+    }
+    const [sx, sy, sw, sh, anchorX] = lut;
+    const dw = sw * scale;
+    const dh = sh * scale;
+
+    // Anchor the source's (anchorX, sh) — i.e. body-bottom — at (this.x, this.y).
+    // Mirror around the body anchor when facing left so the body stays put.
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    if (this.facing === -1) ctx.scale(-1, 1);
+    ctx.drawImage(sheet, sx, sy, sw, sh, -anchorX * scale, -dh, dw, dh);
+    ctx.restore();
+
+    // Name label above head (skip for knocked-out fighters once they're down)
+    if (this.state !== 'knockout' || !this.animDone) {
+      ctx.font = '14px "Press Start 2P", monospace';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#000';
+      ctx.fillStyle = this.color === '#facc15' ? '#fff7c2' : this.color;
+      const ly = this.y - dh - 8;
+      ctx.strokeText(this.name, this.x, ly);
+      ctx.fillText(this.name, this.x, ly);
+    }
+  }
+}
+
+// =========================================================================
+// RING LAYOUT — fighters along an arc on the dojo floor
+// =========================================================================
+function computeRingPositions(n) {
+  const cx = CANVAS_W / 2;
+  const cyBase = 410;
+  const rx = 320;
+  const ry = 75;
+  const positions = [];
+  // Spread along back arc: angles from π (left) through 3π/2 (back) to 2π (right)
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    const angle = Math.PI + Math.PI * t; // π .. 2π
+    const x = cx + Math.cos(angle) * rx;
+    const y = cyBase + Math.sin(angle) * ry;
+    positions.push({ x, y });
+  }
+  return positions;
+}
+
+// =========================================================================
+// PARTICLES & SCREEN SHAKE
+// =========================================================================
+function spawnImpact(x, y, color) {
+  const n = 10;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = rand(80, 220);
+    particles.push({
+      kind: 'impact',
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp,
+      life: rand(0.25, 0.5),
+      color: Math.random() < 0.5 ? '#fff' : (color || '#facc15'),
+      size: rand(3, 5),
+    });
+  }
+}
+function spawnConfetti(x, y) {
+  const n = 6;
+  for (let i = 0; i < n; i++) {
+    particles.push({
+      kind: 'confetti',
+      x: x ?? rand(0, CANVAS_W),
+      y: y ?? rand(-40, -5),
+      vx: rand(-40, 40),
+      vy: rand(40, 120),
+      life: rand(2.5, 4.5),
+      color: pick(FIGHTER_COLORS),
+      size: rand(3, 6),
+      rot: rand(0, Math.PI * 2),
+      vrot: rand(-6, 6),
+    });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.kind === 'confetti') {
+      p.vy += 180 * dt;
+      p.rot += p.vrot * dt;
+      if (p.y > CANVAS_H + 20) particles.splice(i, 1);
+    } else {
+      p.vx *= (1 - 4 * dt);
+      p.vy *= (1 - 4 * dt);
+    }
+  }
+}
+function drawParticles(ctx) {
+  for (const p of particles) {
+    ctx.save();
+    ctx.fillStyle = p.color;
+    if (p.kind === 'confetti') {
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size * 1.4);
+    } else {
+      ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+    }
+    ctx.restore();
+  }
+}
+
+// =========================================================================
+// SETUP UI
+// =========================================================================
+const $ = (id) => document.getElementById(id);
+
+function renderRoster() {
+  const list = $('nameList');
+  list.innerHTML = '';
+  names.forEach((nm, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'name-chip';
+    const span = document.createElement('span');
+    span.textContent = nm;
+    const btn = document.createElement('button');
+    btn.textContent = '×';
+    btn.title = 'Remove';
+    btn.addEventListener('click', () => {
+      names.splice(idx, 1);
+      renderRoster();
+    });
+    chip.appendChild(span);
+    chip.appendChild(btn);
+    list.appendChild(chip);
+  });
+  $('rosterCount').textContent = names.length;
+  const start = $('startBtn');
+  start.disabled = names.length < 2;
+  $('setupStatus').textContent = names.length < 2
+    ? 'Add at least 2 contestants to begin.'
+    : `Ready: ${names.length} contestant${names.length === 1 ? '' : 's'} loaded.`;
+}
+
+function loadFromTextarea() {
+  const raw = $('namesInput').value;
+  const parsed = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  // Dedup while preserving order
+  const seen = new Set(names.map(n => n.toLowerCase()));
+  for (const n of parsed) {
+    if (!seen.has(n.toLowerCase())) {
+      names.push(n);
+      seen.add(n.toLowerCase());
+    }
+  }
+  renderRoster();
+}
+
+$('loadBtn').addEventListener('click', loadFromTextarea);
+$('clearBtn').addEventListener('click', () => { names = []; $('namesInput').value = ''; renderRoster(); });
+$('speed').addEventListener('input', (e) => {
+  speedMul = parseFloat(e.target.value);
+  $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
+});
+$('scanlines').addEventListener('change', (e) => {
+  document.getElementById('arenaWrap').classList.toggle('scanlines', e.target.checked);
+});
+$('startBtn').addEventListener('click', startRumble);
+$('abortBtn').addEventListener('click', backToSetup);
+$('newRumbleBtn').addEventListener('click', backToSetup);
+
+function backToSetup() {
+  runId++;          // invalidate any running loop
+  runningLoop = false;
+  stopWinnerSfx();
+  $('arena').classList.add('hidden');
+  $('endScreen').classList.add('hidden');
+  $('setup').classList.remove('hidden');
+}
+
+// =========================================================================
+// RUMBLE INITIALIZATION
+// =========================================================================
+function startRumble() {
+  if (names.length < 2) return;
+  const maxF = Math.max(2, Math.min(12, parseInt($('maxFighters').value, 10) || 10));
+  const pool = shuffle([...names]).slice(0, Math.min(maxF, names.length));
+
+  // Pick distinct colors for each fighter
+  const colorPool = shuffle([...FIGHTER_COLORS]);
+
+  fighters = pool.map((name, i) => new Fighter(name, colorPool[i % colorPool.length]));
+  const positions = computeRingPositions(fighters.length);
+  fighters.forEach((f, i) => {
+    const p = positions[i];
+    f.x = f.homeX = p.x;
+    f.y = f.homeY = p.y;
+    f.facing = p.x < CANVAS_W/2 ? 1 : -1; // face center
+  });
+  active = [...fighters];
+
+  // Predetermine the raffle winner (fair random pick).
+  predeterminedWinner = active[randInt(active.length)];
+  predeterminedWinner.isWinner = true;
+
+  particles = [];
+  screenShake = 0;
+  pair = null;
+  phase = 'pickPair';
+  phaseTimer = 0;
+
+  $('setup').classList.add('hidden');
+  $('arena').classList.remove('hidden');
+  $('endScreen').classList.add('hidden');
+
+  startLoop();
+}
+
+// =========================================================================
+// MAIN LOOP
+// =========================================================================
+function startLoop() {
+  runId++;
+  const myRun = runId;
+  runningLoop = true;
+  lastT = performance.now();
+  const step = (now) => {
+    if (myRun !== runId) return;
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+    tick(dt);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function tick(dt) {
+  const sdt = dt * speedMul;
+
+  // Advance fighter animations (use scaled dt so speed slider works on anim too)
+  for (const f of fighters) f.update(sdt);
+
+  // Drive battle FSM
+  stepPhase(sdt);
+
+  // Particles + shake
+  updateParticles(dt);
+  if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 50);
+
+  // Render
+  render();
+}
+
+// =========================================================================
+// BATTLE FSM
+// =========================================================================
+function stepPhase(dt) {
+  phaseTimer += dt;
+
+  switch (phase) {
+    case 'pickPair': {
+      if (active.length <= 1) {
+        phase = 'done';
+        phaseTimer = 0;
+        triggerEndScreen();
+        return;
+      }
+      // Choose two distinct active fighters; ensure predetermined winner survives.
+      const idxA = randInt(active.length);
+      let idxB = randInt(active.length);
+      while (idxB === idxA) idxB = randInt(active.length);
+      const a = active[idxA], b = active[idxB];
+      let aggressor, defender;
+      if (a.isWinner)      { aggressor = a; defender = b; }
+      else if (b.isWinner) { aggressor = b; defender = a; }
+      else                 { if (Math.random() < 0.5) { aggressor = a; defender = b; } else { aggressor = b; defender = a; } }
+
+      // Position the fighters on either side of center for the duel.
+      const left  = { x: CANVAS_W/2 - 38, y: 410 };
+      const right = { x: CANVAS_W/2 + 38, y: 410 };
+      // Aggressor goes to the side closer to their home (less travel)
+      if (aggressor.homeX < CANVAS_W/2) {
+        aggressor._target = left; defender._target = right;
+        aggressor.facing = 1; defender.facing = -1;
+      } else {
+        aggressor._target = right; defender._target = left;
+        aggressor.facing = -1; defender.facing = 1;
+      }
+
+      pair = {
+        aggressor, defender,
+        beats: 3 + randInt(3), // 3..5
+        beatIdx: 0,
+        sub: 'attack', subT: 0,
+        attackInit: false,
+      };
+      aggressor.setState('idle');
+      defender.setState('idle');
+      phase = 'walkIn';
+      phaseTimer = 0;
+      break;
+    }
+
+    case 'walkIn': {
+      const speed = 180; // px/sec
+      let bothArrived = true;
+      for (const f of [pair.aggressor, pair.defender]) {
+        const t = f._target;
+        const dx = t.x - f.x, dy = t.y - f.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 2) {
+          const step = Math.min(dist, speed * dt);
+          f.x += dx / dist * step;
+          f.y += dy / dist * step;
+          bothArrived = false;
+        }
+      }
+      if (bothArrived) {
+        phase = 'fight';
+        phaseTimer = 0;
+        pair.sub = 'attack';
+        pair.subT = 0;
+        pair.attackInit = false;
+        pair.aggressor.setState('idle');
+        pair.defender.setState('idle');
+      }
+      break;
+    }
+
+    case 'fight': {
+      const { aggressor, defender } = pair;
+      pair.subT += dt;
+
+      // Beat structure: attacker swings (~0.5s), target reacts (~0.4s), brief cool (~0.2s).
+      // Most beats the predetermined winner (aggressor) attacks. Sometimes the
+      // defender lands a counter — purely cosmetic since defender's blows do
+      // NOT reduce aggressor's health, so the predetermined winner still wins.
+      // The final beat is forced to be aggressor → defender so the KO is real.
+      if (pair.sub === 'attack') {
+        if (!pair.attackInit) {
+          pair.attackInit = true;
+          const isLastBeat = pair.beatIdx === pair.beats - 1;
+          const counter = !isLastBeat && Math.random() < 0.35;
+          const attacker = counter ? defender : aggressor;
+          const target   = counter ? aggressor : defender;
+          const move = Math.random() < 0.5 ? 'punch' : 'kick';
+          attacker._lastMove = move;
+          attacker.setState(move);
+          target.setState('idle');
+          attacker._impactPending = true;
+          pair.attacker = attacker;
+          pair.target   = target;
+        }
+        const att = pair.attacker, tgt = pair.target;
+        // Trigger impact + target hit when attacker reaches frame 2
+        if (att._impactPending && att.frame >= 2) {
+          att._impactPending = false;
+          tgt.setState('hit');
+          // Only real hits (toward the predetermined loser) cost health.
+          if (tgt === defender) tgt.health--;
+          const impactX = (att.x + tgt.x) / 2;
+          const impactY = att.y - 30;
+          spawnImpact(impactX, impactY, tgt.color);
+          screenShake = att._lastMove === 'kick' ? 8 : 4;
+          playSfx('punch');
+        }
+        if (att.animDone) {
+          pair.sub = 'react';
+          pair.subT = 0;
+          att.setState('idle');
+        }
+      } else if (pair.sub === 'react') {
+        const tgt = pair.target;
+        if (tgt.animDone || pair.subT > 0.5) {
+          tgt.setState('idle');
+          pair.sub = 'cool';
+          pair.subT = 0;
+        }
+      } else if (pair.sub === 'cool') {
+        if (pair.subT > 0.18) {
+          pair.beatIdx++;
+          if (pair.beatIdx >= pair.beats || defender.health <= 0) {
+            // Fight over
+            phase = 'knockout';
+            phaseTimer = 0;
+            defender.setState('knockout');
+            // Big shake on KO
+            screenShake = 12;
+          } else {
+            pair.sub = 'attack';
+            pair.subT = 0;
+            pair.attackInit = false;
+          }
+        }
+      }
+      break;
+    }
+
+    case 'knockout': {
+      const { aggressor, defender } = pair;
+      // Wait for KO anim to finish + a beat
+      if (defender.animDone) {
+        if (phaseTimer > 0.7) {
+          // Remove defender from active
+          defender.alive = false;
+          const ai = active.indexOf(defender);
+          if (ai >= 0) active.splice(ai, 1);
+          if (active.length <= 1) {
+            // Final KO: go straight to victory — no walk home, no detour.
+            phase = 'done';
+            phaseTimer = 0;
+            triggerEndScreen();
+          } else {
+            // Aggressor walks back home, next round to follow
+            aggressor._target = { x: aggressor.homeX, y: aggressor.homeY };
+            aggressor.facing = aggressor.homeX < CANVAS_W/2 ? 1 : -1;
+            phase = 'walkOut';
+            phaseTimer = 0;
+          }
+        }
+      }
+      break;
+    }
+
+    case 'walkOut': {
+      const { aggressor } = pair;
+      const speed = 160;
+      const t = aggressor._target;
+      const dx = t.x - aggressor.x, dy = t.y - aggressor.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 2) {
+        const step = Math.min(dist, speed * dt);
+        aggressor.x += dx / dist * step;
+        aggressor.y += dy / dist * step;
+      } else {
+        aggressor.x = aggressor.homeX;
+        aggressor.y = aggressor.homeY;
+        aggressor.facing = aggressor.homeX < CANVAS_W/2 ? 1 : -1;
+        aggressor.setState('idle');
+        // Reset health for next fight (visual only)
+        aggressor.health = 3;
+        // Pause then pick next pair
+        if (phaseTimer > 0.4) {
+          phase = 'pickPair';
+          phaseTimer = 0;
+          pair = null;
+        }
+      }
+      break;
+    }
+
+    case 'done': {
+      // Winner stays in the center, confetti continues.
+      const w = active[0];
+      if (w) {
+        const tx = CANVAS_W/2, ty = 410;
+        const dx = tx - w.x, dy = ty - w.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 2) {
+          const step = Math.min(dist, 140 * dt);
+          w.x += dx / dist * step;
+          w.y += dy / dist * step;
+        } else {
+          w.facing = 1;
+          if (w.state !== 'victory') w.setState('victory');
+        }
+      }
+      // Continuous confetti
+      if (Math.random() < 0.6) spawnConfetti();
+      break;
+    }
+  }
+}
+
+function triggerEndScreen() {
+  const w = active[0];
+  if (!w) return;
+  $('winnerName').textContent = w.name.toUpperCase();
+  $('endScreen').classList.remove('hidden');
+  playSfx('winner');
+}
+
+// =========================================================================
+// RENDER
+// =========================================================================
+function render() {
+  ctx.imageSmoothingEnabled = false;
+  ctx.save();
+  // Background fills full canvas (clears previous frame).
+  ctx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
+
+  // Apply screen shake to game-world layer only.
+  if (screenShake > 0) {
+    ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+  }
+
+  // Sort fighters by y (feet) so closer ones overlap correctly.
+  const drawOrder = [...fighters].sort((a, b) => a.y - b.y);
+  for (const f of drawOrder) f.draw(ctx);
+
+  drawParticles(ctx);
+
+  ctx.restore();
+
+  // HUD (no shake)
+  ctx.font = '10px "Press Start 2P", monospace';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.textAlign = 'left';
+  const hud = `FIGHTERS: ${active.length}/${fighters.length}`;
+  ctx.strokeText(hud, 10, 20);
+  ctx.fillText(hud, 10, 20);
+
+  if (phase !== 'done' && pair) {
+    ctx.textAlign = 'center';
+    const vs = `${pair.aggressor.name}  VS  ${pair.defender.name}`;
+    ctx.strokeText(vs, CANVAS_W/2, 24);
+    ctx.fillStyle = '#facc15';
+    ctx.fillText(vs, CANVAS_W/2, 24);
+  }
+}
+
+// =========================================================================
+// BOOT
+// =========================================================================
+async function boot() {
+  canvas = $('game');
+  ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  // Hint while loading
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px "Press Start 2P", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('LOADING...', CANVAS_W/2, CANVAS_H/2);
+
+  try {
+    [sheetImg, bgImg, victoryImg] = await Promise.all([
+      loadImage(ASSETS.sheet),
+      loadImage(ASSETS.bg),
+      loadImage(ASSETS.victory),
+    ]);
+  } catch (e) {
+    document.body.innerHTML = `<div style="padding:2rem;color:#fca5a5;font-family:monospace">
+      Failed to load assets. Make sure <code>Assets/fighters.png</code>,
+      <code>Assets/backgrouns.png</code>, and <code>Assets/victory.png</code> exist next to <code>index.html</code>,
+      and run via a local server (e.g. <code>python3 -m http.server</code>) if opening from file://.
+      <br><br>${e.message}
+    </div>`;
+    return;
+  }
+
+  // Audio: preload mp3s (browsers won't actually play until first user gesture,
+  // which the START button satisfies).
+  sfx.punch  = new Audio(SFX_SRC.punch);  sfx.punch.volume  = 0.6;
+  sfx.winner = new Audio(SFX_SRC.winner); sfx.winner.volume = 0.7;
+
+  // Pre-warm: prime the speed label
+  speedMul = parseFloat($('speed').value);
+  $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
+
+  renderRoster();
+}
+boot();
+</script>
+</body>
+</html>
