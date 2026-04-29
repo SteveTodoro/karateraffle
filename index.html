@@ -276,6 +276,24 @@ const SKIN_TONES = [
   '#8a5a36', // deep brown
   '#5a3820'  // darkest
 ];
+// Aligns 1:1 with SKIN_TONES. Higher weight = more common. Defaults bias
+// toward the two lighter tones (8+8=16 / 20 total = 80%) with the three
+// darker tones sharing the remaining 20% (2+1+1). Tune freely; only the
+// ratios matter — the helper normalizes per draw.
+const SKIN_WEIGHTS = [8, 8, 2, 1, 1];
+
+// Single weighted random pick — consumes exactly one rng() draw, so the
+// verifier can replay each call deterministically.
+function pickWeighted(items, weights, rngFn) {
+  let total = 0;
+  for (let i = 0; i < weights.length; i++) total += weights[i];
+  let roll = rngFn() * total;
+  for (let i = 0; i < items.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
 
 // Dark fighter colors get a light label fill; very light ones get a soft
 // pastel so they don't disappear into the bright canvas. Stroke stays black.
@@ -867,14 +885,16 @@ async function verifyProof(proofText) {
   }
   const subset = pool.slice(0, Math.min(p.maxFighters, pool.length));
 
-  // Replay palette shuffles (consume RNG state — must match startRumble's
-  // order: FIGHTER_COLORS, SKIN_TONES).
-  for (const palette of [FIGHTER_COLORS, SKIN_TONES]) {
-    const arr = [...palette];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(r() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
+  // Replay palette consumption — must match startRumble's order:
+  //   1. FIGHTER_COLORS shuffle
+  //   2. one weighted skin draw per fighter (subset.length total)
+  const colorArr = [...FIGHTER_COLORS];
+  for (let i = colorArr.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [colorArr[i], colorArr[j]] = [colorArr[j], colorArr[i]];
+  }
+  for (let i = 0; i < subset.length; i++) {
+    pickWeighted(SKIN_TONES, SKIN_WEIGHTS, r);
   }
 
   const winnerIdx = Math.floor(r() * subset.length);
@@ -932,15 +952,15 @@ async function startRumble() {
   const pool = shuffled.slice(0, cut);
   benched = shuffled.slice(cut);
 
-  // Pick distinct gi color and skin tone per fighter (each from a shuffled
-  // palette so the verifier can replay the same RNG sequence).
+  // Gi color: shuffled palette, distinct across fighters.
+  // Skin tone: weighted random per fighter (see SKIN_WEIGHTS for the ratio).
+  // Both are seeded by the same rng so the verifier can replay them.
   const colorPool = shuffle([...FIGHTER_COLORS]);
-  const skinPool  = shuffle([...SKIN_TONES]);
 
   fighters = pool.map((name, i) => new Fighter(
     name,
     colorPool[i % colorPool.length],
-    skinPool[i % skinPool.length]
+    pickWeighted(SKIN_TONES, SKIN_WEIGHTS, rng)
   ));
   const positions = computeRingPositions(fighters.length);
   fighters.forEach((f, i) => {
@@ -1179,7 +1199,10 @@ function stepPhase(dt) {
       } else if (pair.sub === 'react') {
         const tgt = pair.target;
         if (tgt.animDone || pair.subT > 0.5) {
-          tgt.setState('idle');
+          // On a killing blow, leave the target in 'hit' until the knockout
+          // phase swaps in 'knockout'. Resetting to idle here pops them
+          // upright between the reel and the fall.
+          if (tgt.health > 0) tgt.setState('idle');
           pair.sub = 'cool';
           pair.subT = 0;
         }
