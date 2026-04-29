@@ -216,6 +216,8 @@ const SFX_SRC = {
   winner: 'sounds/winner.mp3',
   // Final-battle stinger; intro plays silently if the file is missing.
   final:  'sounds/finalround.mp3',
+  // Plays once over the championship finishing blow, layered with the slow-mo.
+  scream: 'sounds/scream.mp3',
 };
 const SHEET_W = 1248, SHEET_H = 1248;
 const COLS = 5, ROWS = 5;
@@ -301,6 +303,19 @@ let active = [];              // alive subset (references into fighters)
 let particles = [];
 let screenShake = 0;
 let speedMul = 1;
+// Cinematic time controls — used to deliver a slow-mo finish on the championship blow.
+// hitStopRemaining freezes all updates for a real-time count of seconds; cinematicTimeScale
+// multiplies sdt while > 0, stretching animation/FSM time without touching speedMul.
+let cinematicTimeScale = 1;
+let hitStopRemaining = 0;
+// Camera zoom — also driven by the championship blow. Lerps toward target every
+// frame on real-time dt; focal point is set at the impact site so the push-in
+// frames the strike. World layer (bg + fighters + particles) is transformed;
+// HUD and full-screen overlays render un-zoomed.
+let cameraZoom = 1;
+let cameraTargetZoom = 1;
+let cameraFocalX = 400;
+let cameraFocalY = 250;
 let runId = 0;                // increments per rumble to invalidate stale rAF state
 let runningLoop = false;
 let lastT = 0;
@@ -942,6 +957,10 @@ async function startRumble() {
 
   particles = [];
   screenShake = 0;
+  cinematicTimeScale = 1;
+  hitStopRemaining = 0;
+  cameraZoom = 1;
+  cameraTargetZoom = 1;
   pair = null;
   phase = benched.length > 0 ? 'benched' : 'pickPair';
   phaseTimer = 0;
@@ -972,14 +991,22 @@ function startLoop() {
 }
 
 function tick(dt) {
-  const sdt = dt * speedMul;
+  // Camera zoom lerps in real time so it pushes in even during hit-stop / slow-mo.
+  cameraZoom += (cameraTargetZoom - cameraZoom) * (1 - Math.exp(-dt * 6));
 
-  // Advance fighter animations (use scaled dt so speed slider works on anim too)
-  for (const f of fighters) f.update(sdt);
+  // Hit-stop: hold the current frame in real time, skip all sim updates.
+  if (hitStopRemaining > 0) {
+    hitStopRemaining -= dt;
+  } else {
+    const sdt = dt * speedMul * cinematicTimeScale;
 
-  // Drive battle FSM. Cinematic phases (final-two intro, benched-roster card)
-  // play at real-time so they don't speed up with the speed slider.
-  stepPhase((phase === 'finalIntro' || phase === 'benched') ? dt : sdt);
+    // Advance fighter animations (use scaled dt so speed slider works on anim too)
+    for (const f of fighters) f.update(sdt);
+
+    // Drive battle FSM. Cinematic phases (final-two intro, benched-roster card)
+    // play at real-time so they don't speed up with the speed slider.
+    stepPhase((phase === 'finalIntro' || phase === 'benched') ? dt : sdt);
+  }
 
   // Particles + shake
   updateParticles(dt);
@@ -1131,6 +1158,18 @@ function stepPhase(dt) {
           spawnImpact(impactX, impactY, tgt.color);
           screenShake = att._lastMove === 'kick' ? 4 : 2;
           playSfx('punch');
+          // Championship finishing blow — arm slow-mo + scream + camera push
+          // at the exact impact frame so the punch follow-through, hit-react,
+          // and KO all play at the dilated speed under a tight close-up.
+          if (tgt === defender && tgt.health <= 0 && active.length === 2) {
+            hitStopRemaining   = 0.15;
+            cinematicTimeScale = 0.30;
+            screenShake = 8;
+            cameraTargetZoom = 1.7;
+            cameraFocalX = (att.x + tgt.x) / 2;
+            cameraFocalY = (att.y + tgt.y) / 2 - 30;
+            playSfx('scream');
+          }
         }
         if (att.animDone) {
           pair.sub = 'react';
@@ -1152,8 +1191,11 @@ function stepPhase(dt) {
             phase = 'knockout';
             phaseTimer = 0;
             defender.setState('knockout');
-            // Big shake on KO
-            screenShake = 6;
+            // Big shake on KO (regular fights — championship gets a stronger
+            // shake armed at the impact frame, see the punch handler above).
+            if (!(active.length === 2 && defender.health <= 0)) {
+              screenShake = 6;
+            }
           } else {
             pair.sub = 'attack';
             pair.subT = 0;
@@ -1177,6 +1219,8 @@ function stepPhase(dt) {
             // Final KO: go straight to victory — no walk home, no detour.
             phase = 'done';
             phaseTimer = 0;
+            cinematicTimeScale = 1;  // restore real-time before winner reveal
+            cameraTargetZoom = 1;    // pull back out (mostly hidden by overlay)
             triggerEndScreen();
           } else {
             // Aggressor walks back home, next round to follow
@@ -1530,8 +1574,22 @@ function renderBenched(ctx, t) {
 
 function render() {
   ctx.imageSmoothingEnabled = false;
+  // Clear the canvas un-zoomed so a black border never shows when the camera
+  // pushes in (defensive — at zoom >= 1 the world bg covers anyway).
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
   ctx.save();
-  // Background fills full canvas (clears previous frame).
+
+  // Camera push (championship-blow zoom). At zoom 1 this is a no-op transform.
+  if (cameraZoom !== 1) {
+    ctx.translate(cameraFocalX, cameraFocalY);
+    ctx.scale(cameraZoom, cameraZoom);
+    ctx.translate(-cameraFocalX, -cameraFocalY);
+  }
+
+  // Background fills full canvas (clears previous frame). Drawn inside the
+  // zoom transform so the whole world pushes in together.
   ctx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
 
   // Apply screen shake to game-world layer only.
@@ -1619,6 +1677,7 @@ async function boot() {
   sfx.punch  = new Audio(SFX_SRC.punch);  sfx.punch.volume  = 0.6;
   sfx.winner = new Audio(SFX_SRC.winner); sfx.winner.volume = 0.7;
   sfx.final  = new Audio(SFX_SRC.final);  sfx.final.volume  = 0.8;
+  sfx.scream = new Audio(SFX_SRC.scream); sfx.scream.volume = 0.8;
 
   // Pre-warm: prime the speed label
   speedMul = parseFloat($('speed').value);
