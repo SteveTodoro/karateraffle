@@ -78,9 +78,61 @@
   }
   .name-chip button:hover { color: #fca5a5; }
   input[type=range] { accent-color: #facc15; }
+
+  /* ============== SIDE-RAIL ADS (desktop only) ============== */
+  .page-grid {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1024px) 160px;
+    gap: 24px;
+    justify-content: center;
+    align-items: start;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .ad-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    position: sticky;
+    top: 16px;
+  }
+  .ad-slot {
+    display: block;
+    width: 160px;
+    height: 600px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    overflow: hidden;
+  }
+  .ad-slot img { width: 100%; height: 100%; display: block; }
+  .ad-slot:hover { outline: 1px solid #facc15; }
+  .ad-rail-label {
+    font-size: 9px;
+    color: #555;
+    text-align: center;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 1px;
+  }
+  @media (max-width: 1199px) {
+    .page-grid { grid-template-columns: 1fr; max-width: none; }
+    .ad-rail { display: none; }
+  }
 </style>
 </head>
 <body class="min-h-screen p-4 sm:p-8">
+
+<div class="page-grid">
+  <aside class="ad-rail">
+    <a class="ad-slot" href="https://example.com" target="_blank" rel="noopener noreferrer sponsored">
+      <img src="ads/left-1.png" alt="Sponsor" width="160" height="600" loading="lazy">
+    </a>
+    <!-- Future second slot stacks here:
+    <a class="ad-slot" href="..." target="_blank" rel="noopener noreferrer sponsored">
+      <img src="ads/left-2.png" alt="Sponsor" width="160" height="600" loading="lazy">
+    </a>
+    -->
+    <div class="ad-rail-label">SPONSORED</div>
+  </aside>
 
 <div class="max-w-5xl mx-auto">
   <div class="flex items-start justify-between gap-4 mb-2">
@@ -94,7 +146,20 @@
       </svg>
     </a>
   </div>
-  <p class="text-sm text-gray-400 mb-6">A pixel-art elimination raffle. Last fighter standing wins.</p>
+  <div class="flex items-center gap-x-4 gap-y-2 mb-6 flex-wrap text-xs">
+    <span class="inline-flex items-center gap-2 flex-wrap">
+      <span class="pixel text-yellow-300">TIP ETH</span>
+      <code id="ethAddr" class="bg-black border border-gray-700 rounded px-2 py-1 font-mono break-all">0x69e2d4ecb55fc6faa1d48bfe7a33b26d2066ea55</code>
+      <button id="copyEthBtn" class="px-2 py-1 bg-blue-700 hover:bg-blue-600 rounded" title="Copy ETH address">📋</button>
+      <span id="ethStatus" class="text-gray-500"></span>
+    </span>
+    <span class="inline-flex items-center gap-2 flex-wrap">
+      <span class="pixel text-yellow-300">TIP BTC</span>
+      <code id="btcAddr" class="bg-black border border-gray-700 rounded px-2 py-1 font-mono break-all">34ranyP6vQLJGU5vgUDnfjbGor4J2qFvMv</code>
+      <button id="copyBtcBtn" class="px-2 py-1 bg-blue-700 hover:bg-blue-600 rounded" title="Copy BTC address">📋</button>
+      <span id="btcStatus" class="text-gray-500"></span>
+    </span>
+  </div>
 
   <!-- =========================== SETUP =========================== -->
   <section id="setup" class="bg-gray-900 border-2 border-yellow-500 rounded-lg p-4 sm:p-6 shadow-xl">
@@ -104,6 +169,23 @@
         <textarea id="namesInput" rows="10"
           class="w-full bg-black text-green-300 p-3 rounded border border-gray-700 font-mono text-sm focus:outline-none focus:border-yellow-500"
           placeholder="Akira&#10;Bruce&#10;Chun-Li&#10;Daisuke&#10;Eiko"></textarea>
+        <details class="mt-3 bg-black/40 border border-gray-700 rounded p-2">
+          <summary class="pixel text-[10px] text-yellow-300 cursor-pointer">
+            IMPORT FROM URL (Google Sheet / pastebin / any public CSV)
+          </summary>
+          <p class="text-[11px] text-gray-400 mt-2 mb-2">
+            Paste a public URL returning CSV or one name per line.
+            Easiest setup: Google Form &rarr; Sheet &rarr; File &rarr; Share &rarr; <em>Publish to web</em> &rarr; CSV.
+            The last non-empty column per row becomes the name; the header row is skipped.
+          </p>
+          <div class="flex gap-2">
+            <input id="importUrl" type="url"
+              placeholder="https://docs.google.com/.../pub?output=csv"
+              class="flex-1 bg-black border border-gray-700 rounded p-2 font-mono text-xs">
+            <button id="importBtn" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs">Fetch</button>
+          </div>
+          <p id="importStatus" class="text-[11px] text-gray-500 mt-2"></p>
+        </details>
         <div class="mt-3 flex gap-2 flex-wrap">
           <button id="loadBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold">Load Contestants</button>
           <button id="clearBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Clear All</button>
@@ -194,6 +276,14 @@
       <button id="abortBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">Back to Setup</button>
     </div>
   </section>
+</div>
+
+  <aside class="ad-rail">
+    <a class="ad-slot" href="https://example.com" target="_blank" rel="noopener noreferrer sponsored">
+      <img src="ads/right-1.png" alt="Sponsor" width="160" height="600" loading="lazy">
+    </a>
+    <div class="ad-rail-label">SPONSORED</div>
+  </aside>
 </div>
 
 <script>
@@ -807,6 +897,76 @@ function loadFromTextarea() {
 
 $('loadBtn').addEventListener('click', loadFromTextarea);
 $('clearBtn').addEventListener('click', () => { names = []; $('namesInput').value = ''; renderRoster(); });
+
+// =========================================================================
+// IMPORT FROM URL — fetch CSV / plain text and populate the names textarea
+// =========================================================================
+function parseRoster(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const rows = [];
+  let cur = [''], inQ = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (c === '"') {
+      if (inQ && trimmed[i + 1] === '"') { cur[cur.length - 1] += '"'; i++; }
+      else inQ = !inQ;
+    } else if (c === ',' && !inQ) {
+      cur.push('');
+    } else if ((c === '\n' || c === '\r') && !inQ) {
+      if (cur.length > 1 || cur[0] !== '') rows.push(cur);
+      cur = [''];
+      if (c === '\r' && trimmed[i + 1] === '\n') i++;
+    } else {
+      cur[cur.length - 1] += c;
+    }
+  }
+  if (cur.length > 1 || cur[0] !== '') rows.push(cur);
+  if (!rows.length) return [];
+  const looksLikeHeader = rows[0].some(c => /name|timestamp|email/i.test(c));
+  const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+  const out = [];
+  const seen = new Set();
+  for (const row of dataRows) {
+    const cells = row.map(c => c.trim()).filter(Boolean);
+    if (!cells.length) continue;
+    const name = cells[cells.length - 1];
+    const key = name.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(name); }
+  }
+  return out;
+}
+
+async function importFromUrl(url) {
+  const status = $('importStatus');
+  const setStatus = (msg, cls) => {
+    status.textContent = msg;
+    status.className = `text-[11px] mt-2 ${cls}`;
+  };
+  setStatus('Fetching…', 'text-gray-400');
+  try {
+    const r = await fetch(url, { redirect: 'follow' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const text = await r.text();
+    const namesParsed = parseRoster(text);
+    if (!namesParsed.length) throw new Error('No names found in response');
+    $('namesInput').value = namesParsed.join('\n');
+    setStatus(`Imported ${namesParsed.length} name${namesParsed.length === 1 ? '' : 's'} — click "Load Contestants" to apply.`, 'text-green-400');
+    localStorage.setItem('karateraffle.importUrl', url);
+  } catch (e) {
+    setStatus(`Failed: ${e.message}. (CORS-blocked? Sheet not published? Check URL.)`, 'text-red-400');
+  }
+}
+
+$('importBtn').addEventListener('click', () => {
+  const url = $('importUrl').value.trim();
+  if (url) importFromUrl(url);
+});
+$('importUrl').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('importBtn').click(); }
+});
+const lastImportUrl = localStorage.getItem('karateraffle.importUrl');
+if (lastImportUrl) $('importUrl').value = lastImportUrl;
 $('speed').addEventListener('input', (e) => {
   speedMul = parseFloat(e.target.value);
   $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
@@ -844,6 +1004,19 @@ $('copyCommitBtn').addEventListener('click', async () => {
   const ok = await copyToClipboard(commit);
   flashSeedStatus(ok ? 'Commit copied!' : 'Copy failed', ok);
 });
+
+function wireTipCopy(btnId, srcId, statusId) {
+  $(btnId).addEventListener('click', async () => {
+    const addr = $(srcId).textContent.trim();
+    const ok = await copyToClipboard(addr);
+    const el = $(statusId);
+    el.textContent = ok ? 'Copied!' : 'Copy failed';
+    el.className = 'text-xs ' + (ok ? 'text-green-400' : 'text-red-400');
+    setTimeout(() => { el.textContent = ''; el.className = 'text-gray-500'; }, 2000);
+  });
+}
+wireTipCopy('copyEthBtn', 'ethAddr', 'ethStatus');
+wireTipCopy('copyBtcBtn', 'btcAddr', 'btcStatus');
 
 $('newSeedBtn').addEventListener('click', async () => {
   await regenerateSeed();
