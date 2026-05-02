@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <title>Royal Rumble Raffle</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Royal Rumble Raffle — pixel-art provably-fair elimination raffle. Last fighter standing wins.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Royal Rumble — Pixel-Art Provably-Fair Raffle">
+<meta name="twitter:description" content="Last fighter standing wins. Cryptographically verifiable.">
+<meta name="twitter:image" content="og-card.png">
+<meta property="og:title" content="Royal Rumble — Pixel-Art Provably-Fair Raffle">
+<meta property="og:description" content="Last fighter standing wins. Cryptographically verifiable.">
+<meta property="og:image" content="og-card.png">
+<meta property="og:type" content="website">
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -117,6 +126,89 @@
     .page-grid { grid-template-columns: 1fr; max-width: none; }
     .ad-rail { display: none; }
   }
+
+  /* ============== POLAROID VICTORY CARD ============== */
+  .polaroid {
+    background: #fafafa;
+    padding: 12px 12px 56px 12px;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.6), 0 4px 8px rgba(0,0,0,0.4);
+    position: absolute;
+    top: 56%;
+    left: 50%;
+    transform: translate(-50%, -180vh) rotate(-9deg);
+    transition: transform 750ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 200ms;
+    z-index: 10;
+    will-change: transform;
+  }
+  .polaroid.show {
+    transform: translate(-50%, -50%) rotate(-3deg);
+  }
+  .polaroid.hidden { display: none; }
+  .polaroid canvas {
+    width: 240px;
+    height: 240px;
+    image-rendering: pixelated;
+    background: #1a0f2e;
+    display: block;
+  }
+  .polaroid-title {
+    font-family: var(--pixel-font);
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: #111;
+    text-align: center;
+    padding: 2px 4px 10px 4px;
+    word-break: break-word;
+    line-height: 1.35;
+    width: 240px;
+  }
+  .polaroid-title:empty { display: none; }
+  .polaroid-caption {
+    margin-top: 10px;
+    color: #111;
+    text-align: center;
+    width: 240px;
+  }
+  .polaroid-name {
+    font-family: var(--pixel-font);
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: #111;
+    word-break: break-word;
+  }
+  .polaroid-meta {
+    margin-top: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    color: #777;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  /* When the polaroid is on screen, hide the redundant text name and the
+     proof-reveal accordion behind it so the polaroid is the focal point.
+     The WINNER! banner stays for the visual punch; NEW RUMBLE button stays
+     pinned to the bottom (margin-top:auto). */
+  #endScreen.with-polaroid #winnerName,
+  #endScreen.with-polaroid > details { display: none; }
+  .camera-flash {
+    position: absolute;
+    inset: 0;
+    background: #ffffff;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 9;
+    transition: opacity 80ms ease-out;
+  }
+  .camera-flash.flash-on { opacity: 1; }
+  .camera-flash.fading { transition: opacity 320ms ease-out; opacity: 0; }
+  .camera-flash.hidden { display: none; }
+  #polaroidActions { z-index: 11; position: relative; }
+  #replayBanner.replay-error {
+    background: rgba(127, 29, 29, 0.6);
+    border-color: #ef4444;
+    color: #fecaca;
+  }
 </style>
 </head>
 <body class="min-h-screen p-4 sm:p-8">
@@ -161,31 +253,40 @@
     </span>
   </div>
 
+  <div id="replayBanner" class="hidden bg-purple-900 border border-purple-500 text-purple-100 text-xs rounded p-2 mb-3 font-mono">
+    <span id="replayBannerText">🔁 Replaying rumble from <span id="replayBannerDate"></span> · commit <span id="replayBannerCommit"></span></span>
+  </div>
+
   <!-- =========================== SETUP =========================== -->
   <section id="setup" class="bg-gray-900 border-2 border-yellow-500 rounded-lg p-4 sm:p-6 shadow-xl">
+    <details class="mb-6 bg-black/40 border border-gray-700 rounded p-2">
+      <summary class="pixel text-[10px] text-yellow-300 cursor-pointer">
+        IMPORT FROM URL (Google Sheet / pastebin / any public CSV)
+      </summary>
+      <p class="text-[11px] text-gray-400 mt-2 mb-2">
+        Paste a public URL returning CSV or one name per line.
+        Easiest setup: Google Form &rarr; Sheet &rarr; File &rarr; Share &rarr; <em>Publish to web</em> &rarr; CSV.
+        The last non-empty column per row becomes the name; the header row is skipped.
+      </p>
+      <div class="flex gap-2">
+        <input id="importUrl" type="url"
+          placeholder="https://docs.google.com/.../pub?output=csv"
+          class="flex-1 bg-black border border-gray-700 rounded p-2 font-mono text-xs">
+        <button id="importBtn" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs">Fetch</button>
+      </div>
+      <p id="importStatus" class="text-[11px] text-gray-500 mt-2"></p>
+    </details>
+
     <div class="grid md:grid-cols-2 gap-6">
       <div>
+        <label class="pixel text-xs text-yellow-300 block mb-2">RAFFLE NAME (optional)</label>
+        <input id="raffleName" type="text" maxlength="40"
+          placeholder='e.g. "Pudgy Penguins WL"'
+          class="w-full bg-black border border-gray-700 rounded p-2 mb-3 font-mono text-sm focus:outline-none focus:border-yellow-500">
         <label class="pixel text-xs text-yellow-300 block mb-2">CONTESTANT NAMES (one per line)</label>
         <textarea id="namesInput" rows="10"
           class="w-full bg-black text-green-300 p-3 rounded border border-gray-700 font-mono text-sm focus:outline-none focus:border-yellow-500"
           placeholder="Akira&#10;Bruce&#10;Chun-Li&#10;Daisuke&#10;Eiko"></textarea>
-        <details class="mt-3 bg-black/40 border border-gray-700 rounded p-2">
-          <summary class="pixel text-[10px] text-yellow-300 cursor-pointer">
-            IMPORT FROM URL (Google Sheet / pastebin / any public CSV)
-          </summary>
-          <p class="text-[11px] text-gray-400 mt-2 mb-2">
-            Paste a public URL returning CSV or one name per line.
-            Easiest setup: Google Form &rarr; Sheet &rarr; File &rarr; Share &rarr; <em>Publish to web</em> &rarr; CSV.
-            The last non-empty column per row becomes the name; the header row is skipped.
-          </p>
-          <div class="flex gap-2">
-            <input id="importUrl" type="url"
-              placeholder="https://docs.google.com/.../pub?output=csv"
-              class="flex-1 bg-black border border-gray-700 rounded p-2 font-mono text-xs">
-            <button id="importBtn" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-xs">Fetch</button>
-          </div>
-          <p id="importStatus" class="text-[11px] text-gray-500 mt-2"></p>
-        </details>
         <div class="mt-3 flex gap-2 flex-wrap">
           <button id="loadBtn" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold">Load Contestants</button>
           <button id="clearBtn" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Clear All</button>
@@ -196,17 +297,10 @@
         <label class="pixel text-xs text-yellow-300 block mb-2">ROSTER (<span id="rosterCount">0</span>)</label>
         <div id="nameList" class="bg-black border border-gray-700 rounded p-3 min-h-[200px] max-h-[260px] overflow-auto flex flex-wrap gap-2 content-start"></div>
 
-        <div class="mt-4 grid grid-cols-2 gap-3">
-          <label class="text-sm">
-            <span class="pixel text-xs text-yellow-300 block mb-1">MAX FIGHTERS</span>
-            <input id="maxFighters" type="number" min="2" max="20" value="20"
-              class="w-full bg-black border border-gray-700 rounded p-2 text-center font-mono">
-          </label>
-          <label class="text-sm">
-            <span class="pixel text-xs text-yellow-300 block mb-1">SPEED <span id="speedLabel">1.0x</span></span>
-            <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" class="w-full mt-2">
-          </label>
-        </div>
+        <label class="text-sm block mt-4">
+          <span class="pixel text-xs text-yellow-300 block mb-1">SPEED <span id="speedLabel">1.0x</span></span>
+          <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" class="w-full mt-2">
+        </label>
 
         <label class="mt-3 flex items-center gap-2 text-sm">
           <input id="scanlines" type="checkbox" checked class="w-4 h-4">
@@ -254,6 +348,18 @@
   <section id="arena" class="hidden mt-4">
     <div id="arenaWrap" class="scanlines">
       <canvas id="game" width="800" height="500"></canvas>
+      <div id="cameraFlash" class="camera-flash hidden"></div>
+      <div id="polaroid" class="polaroid hidden">
+        <div id="polaroidTitle" class="polaroid-title"></div>
+        <canvas id="polaroidPhoto" width="320" height="320"></canvas>
+        <div class="polaroid-caption">
+          <div id="polaroidName" class="polaroid-name"></div>
+          <div class="polaroid-meta">
+            <span id="polaroidDate"></span>
+            <span id="polaroidCommit"></span>
+          </div>
+        </div>
+      </div>
       <div id="endScreen" class="hidden">
         <div class="winner-banner">WINNER!</div>
         <div id="winnerName" class="winner-name"></div>
@@ -271,6 +377,12 @@
         <button id="newRumbleBtn" class="pixel px-6 py-3 bg-green-600 hover:bg-green-500 rounded text-yellow-300 mt-4"
           style="text-shadow: 2px 2px 0 #000;">NEW RUMBLE</button>
       </div>
+    </div>
+    <div id="polaroidActions" class="hidden flex gap-2 justify-center flex-wrap mt-3">
+      <button id="savePolaroidBtn" class="px-3 py-2 bg-yellow-500 hover:bg-yellow-400 rounded text-black font-bold text-sm">📸 Save Polaroid</button>
+      <button id="shareXBtn" class="px-3 py-2 bg-black hover:bg-gray-800 border border-gray-600 rounded text-sm text-white">𝕏 Share on X</button>
+      <button id="copyReplayBtn" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm">🔗 Copy Replay Link</button>
+      <span id="replayStatus" class="text-xs self-center w-full text-center"></span>
     </div>
     <div class="text-center mt-3">
       <button id="abortBtn" class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">Back to Setup</button>
@@ -308,6 +420,8 @@ const SFX_SRC = {
   final:  'sounds/finalround.mp3',
   // Plays once over the championship finishing blow, layered with the slow-mo.
   scream: 'sounds/scream.mp3',
+  // Camera shutter — fires alongside the white flash when the polaroid drops.
+  polaroid: 'sounds/polaroid.mp3',
 };
 const SHEET_W = 1248, SHEET_H = 1248;
 const COLS = 5, ROWS = 5;
@@ -967,6 +1081,13 @@ $('importUrl').addEventListener('keydown', e => {
 });
 const lastImportUrl = localStorage.getItem('karateraffle.importUrl');
 if (lastImportUrl) $('importUrl').value = lastImportUrl;
+
+$('raffleName')?.addEventListener('input', () => {
+  localStorage.setItem('karateraffle.raffleName', $('raffleName').value);
+});
+const lastRaffle = localStorage.getItem('karateraffle.raffleName');
+if (lastRaffle) $('raffleName').value = lastRaffle;
+
 $('speed').addEventListener('input', (e) => {
   speedMul = parseFloat(e.target.value);
   $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
@@ -1031,6 +1152,185 @@ $('copyProofBtn')?.addEventListener('click', async () => {
   const orig = btn.textContent;
   btn.textContent = ok ? '✓ Copied!' : '✗ Failed';
   setTimeout(() => { btn.textContent = orig; }, 1800);
+});
+
+// =========================================================================
+// SHARE: save polaroid PNG, X intent, copy replay link
+// =========================================================================
+// Compact replay payload — packed binary, ~4× shorter than base64 JSON.
+// Layout (v1):
+//   1 byte  version
+//   32 byte serverSeed (raw, not hex)
+//   6 byte  timestamp ms since epoch, big-endian
+//   1 byte  maxFighters
+//   1 byte  roster count
+//   N times: 1 byte name length + UTF-8 bytes
+// v2 appends one more length-prefixed UTF-8 field at the end: raffleName.
+// `commit` is sha256(serverSeed) — derived on decode. `winnerName` falls out
+// of the deterministic replay, so neither is sent over the wire.
+function packProof(p) {
+  const enc = new TextEncoder();
+  const seed = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) seed[i] = parseInt(p.serverSeed.substr(i*2, 2), 16);
+  const ts = Date.parse(p.timestamp);
+  const nameBufs = p.roster.map(n => {
+    const b = enc.encode(n);
+    if (b.length > 255) throw new Error(`name too long for compact URL: ${n}`);
+    return b;
+  });
+  const raffleBuf = enc.encode((p.raffleName || '').slice(0, 40));
+  if (raffleBuf.length > 255) throw new Error('raffle name too long for compact URL');
+  let total = 41;
+  for (const b of nameBufs) total += 1 + b.length;
+  total += 1 + raffleBuf.length;       // raffleName field (v2)
+  const out = new Uint8Array(total);
+  let i = 0;
+  out[i++] = 2;                        // version 2 (raffleName-aware)
+  out.set(seed, i); i += 32;
+  out[i++] = Math.floor(ts / 0x10000000000) & 0xff;
+  out[i++] = Math.floor(ts / 0x100000000)   & 0xff;
+  out[i++] = (ts >>> 24) & 0xff;
+  out[i++] = (ts >>> 16) & 0xff;
+  out[i++] = (ts >>> 8)  & 0xff;
+  out[i++] =  ts         & 0xff;
+  out[i++] = p.maxFighters & 0xff;
+  out[i++] = nameBufs.length & 0xff;
+  for (const b of nameBufs) { out[i++] = b.length; out.set(b, i); i += b.length; }
+  out[i++] = raffleBuf.length;
+  out.set(raffleBuf, i); i += raffleBuf.length;
+  return out;
+}
+
+function unpackProof(bytes) {
+  if (bytes.length < 41) throw new Error('payload too short');
+  const dec = new TextDecoder();
+  let i = 0;
+  const version = bytes[i++];
+  if (version !== 1 && version !== 2) throw new Error('unsupported version: ' + version);
+  let serverSeed = '';
+  for (let k = 0; k < 32; k++) serverSeed += bytes[i + k].toString(16).padStart(2, '0');
+  i += 32;
+  const ts = bytes[i] * 0x10000000000 + bytes[i+1] * 0x100000000 +
+             bytes[i+2] * 0x1000000   + bytes[i+3] * 0x10000     +
+             bytes[i+4] * 0x100       + bytes[i+5];
+  i += 6;
+  const maxFighters = bytes[i++];
+  const count = bytes[i++];
+  const roster = [];
+  for (let n = 0; n < count; n++) {
+    if (i + 1 > bytes.length) throw new Error('truncated');
+    const len = bytes[i++];
+    if (i + len > bytes.length) throw new Error('truncated');
+    roster.push(dec.decode(bytes.slice(i, i + len)));
+    i += len;
+  }
+  let raffleName = '';
+  if (version >= 2 && i < bytes.length) {
+    const len = bytes[i++];
+    if (i + len > bytes.length) throw new Error('truncated raffleName');
+    raffleName = dec.decode(bytes.slice(i, i + len));
+    i += len;
+  }
+  return { version, serverSeed, timestamp: new Date(ts).toISOString(), maxFighters, roster, raffleName };
+}
+
+function bytesToBase64Url(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(s) {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '==='.slice((b64.length + 3) % 4);
+  const bin = atob(padded);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function buildReplayUrl() {
+  const b64 = bytesToBase64Url(packProof(proof));
+  return `${location.origin}${location.pathname}#r=${b64}`;
+}
+
+function setReplayStatus(msg, kind) {
+  const el = $('replayStatus');
+  el.textContent = msg;
+  const tone = kind === 'ok' ? 'text-green-400'
+             : kind === 'err' ? 'text-red-400'
+             : kind === 'tip' ? 'text-yellow-300'
+             : 'text-gray-400';
+  el.className = `text-xs self-center w-full text-center ${tone}`;
+  if (msg) setTimeout(() => {
+    if (el.textContent === msg) el.textContent = '';
+  }, 4000);
+}
+
+$('savePolaroidBtn').addEventListener('click', () => {
+  if (!proof || !proof.winnerName) return;
+  const title = (proof.raffleName || '').toUpperCase();
+  const out = document.createElement('canvas');
+  out.width = 600; out.height = title ? 740 : 700;
+  const o = out.getContext('2d');
+  o.imageSmoothingEnabled = false;
+  o.fillStyle = '#fafafa';
+  o.fillRect(0, 0, out.width, out.height);
+  const photoY = title ? 70 : 30;
+  o.fillStyle = '#111';
+  o.textAlign = 'center';
+  const maxW = 540;
+  // Title (centered, above photo) — scales down to fit.
+  if (title) {
+    let size = 22;
+    o.font = `bold ${size}px "Press Start 2P", ui-monospace, monospace`;
+    while (size > 11 && o.measureText(title).width > maxW) {
+      size -= 2;
+      o.font = `bold ${size}px "Press Start 2P", ui-monospace, monospace`;
+    }
+    o.fillText(title, 300, 48);
+  }
+  // Photo
+  o.drawImage($('polaroidPhoto'), 30, photoY, 540, 540);
+  // Winner name — same scale-to-fit logic as before.
+  const name = proof.winnerName.toUpperCase();
+  o.font = 'bold 28px "Press Start 2P", ui-monospace, monospace';
+  if (o.measureText(name).width > maxW) {
+    let size = 28;
+    while (size > 14 && o.measureText(name).width > maxW) {
+      size -= 2;
+      o.font = `bold ${size}px "Press Start 2P", ui-monospace, monospace`;
+    }
+  }
+  o.fillStyle = '#111';
+  o.fillText(name, 300, photoY + 540 + 45);
+  // Meta
+  o.font = '16px ui-monospace, monospace';
+  o.fillStyle = '#666';
+  const meta = `${$('polaroidDate').textContent}  •  ${$('polaroidCommit').textContent}`;
+  o.fillText(meta, 300, photoY + 540 + 90);
+  // Filename — include raffle slug when present.
+  const slug = [proof.raffleName, proof.winnerName].filter(Boolean).join('-');
+  const link = document.createElement('a');
+  link.download = `karateraffle-${(slug || 'champion').replace(/\W+/g, '-').toLowerCase()}.png`;
+  link.href = out.toDataURL('image/png');
+  link.click();
+});
+
+$('shareXBtn').addEventListener('click', () => {
+  if (!proof || !proof.winnerName) return;
+  const url = buildReplayUrl();
+  const what = proof.raffleName || 'the Royal Rumble';
+  const text = `🥋 ${proof.winnerName} just won ${what}! Replay the exact rumble (provably fair):`;
+  const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+  window.open(intent, '_blank', 'noopener,noreferrer');
+  setReplayStatus('Tip: drag your saved Polaroid into the tweet for the image.', 'tip');
+});
+
+$('copyReplayBtn').addEventListener('click', async () => {
+  if (!proof || !proof.winnerName) return;
+  const ok = await copyToClipboard(buildReplayUrl());
+  setReplayStatus(ok ? '✓ Replay link copied!' : '✗ Copy failed', ok ? 'ok' : 'err');
 });
 
 // Pure verifier — replays the deterministic part of startRumble (subset shuffle
@@ -1100,25 +1400,32 @@ async function backToSetup() {
   await regenerateSeed();  // fresh commit for the next rumble
   $('arena').classList.add('hidden');
   $('endScreen').classList.add('hidden');
+  hidePolaroidUI();
   $('setup').classList.remove('hidden');
 }
 
 // =========================================================================
 // RUMBLE INITIALIZATION
 // =========================================================================
-async function startRumble() {
+async function startRumble(replayProof = null) {
   if (names.length < 2) return;
-  const maxF = Math.max(2, Math.min(20, parseInt($('maxFighters').value, 10) || 10));
+  const maxF = 20;
 
   // Provably-fair seed derivation. Mix the secret serverSeed with publicly
   // observable values (timestamp, roster, maxFighters) and hash. The first
   // 32 bits seed mulberry32 — every randInt/shuffle/rng() call from here on
   // is deterministic given (serverSeed, timestamp, names, maxF).
-  const timestamp   = new Date().toISOString();
+  // When replayProof is supplied, reuse its serverSeed/timestamp/commit so
+  // the rumble re-derives identically.
+  const timestamp   = replayProof ? replayProof.timestamp  : new Date().toISOString();
+  const seedToUse   = replayProof ? replayProof.serverSeed : serverSeed;
+  const commitToUse = replayProof ? replayProof.commit     : commit;
+  const raffleName  = replayProof ? (replayProof.raffleName || '')
+                                  : ($('raffleName')?.value || '').trim().slice(0, 40);
   const rosterCanon = JSON.stringify(names);
-  const combined    = await sha256Hex(`${serverSeed}|${timestamp}|${rosterCanon}|${maxF}`);
+  const combined    = await sha256Hex(`${seedToUse}|${timestamp}|${rosterCanon}|${maxF}`);
   rng   = mulberry32(seedFromHex(combined));
-  proof = { version: 1, serverSeed, commit, timestamp, roster: [...names], maxFighters: maxF, winnerName: null };
+  proof = { version: 1, serverSeed: seedToUse, commit: commitToUse, timestamp, roster: [...names], maxFighters: maxF, winnerName: null, raffleName };
 
   const shuffled = shuffle([...names]);
   const cut = Math.min(maxF, shuffled.length);
@@ -1495,6 +1802,98 @@ function triggerEndScreen() {
     $('revealTimestamp').textContent = proof.timestamp;
     $('revealJson').value            = JSON.stringify(proof, null, 2);
   }
+
+  // Polaroid drops in after the fist-pump has had a moment.
+  const myRunId = runId;
+  setTimeout(() => { if (myRunId === runId) showPolaroid(w); }, 1800);
+}
+
+// =========================================================================
+// POLAROID VICTORY CARD
+// =========================================================================
+function renderPolaroidPhoto(winner) {
+  const c = $('polaroidPhoto');
+  const pctx = c.getContext('2d');
+  pctx.imageSmoothingEnabled = false;
+  // Stage backdrop: vertical sunset gradient behind the portrait.
+  const grad = pctx.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0,   '#1a0f2e');
+  grad.addColorStop(0.55,'#3a1f4e');
+  grad.addColorStop(1,   '#6b3470');
+  pctx.fillStyle = grad;
+  pctx.fillRect(0, 0, c.width, c.height);
+  // Reuse the existing letterbox-fit portrait helper.
+  drawPortrait(pctx, winner, 8, 8, c.width - 16, c.height - 16);
+  // Hanko-style "PROOF OF WIN" stamp, bottom-right, slightly tilted.
+  drawHanko(pctx, c.width - 86, c.height - 86, 72);
+}
+
+function drawHanko(ctx, x, y, size) {
+  ctx.save();
+  // Stamp around its own center so rotation looks natural.
+  ctx.translate(x + size/2, y + size/2);
+  ctx.rotate(11 * Math.PI / 180);
+  // Two passes — a faint underlay + a sharp top — to mimic uneven ink contact.
+  const draw = (alpha, offset) => {
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#b9211d';
+    ctx.fillStyle   = '#b9211d';
+    ctx.lineWidth   = 5;
+    ctx.lineJoin    = 'miter';
+    ctx.strokeRect(-size/2 + offset, -size/2 + offset, size, size);
+    ctx.font = 'bold 13px "Press Start 2P", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('PROOF',  offset, -12 + offset);
+    ctx.fillText('OF',     offset,   2 + offset);
+    ctx.fillText('WIN',    offset,  16 + offset);
+  };
+  draw(0.55, 1);   // soft underlay (slight bleed)
+  draw(0.92, 0);   // crisp top stamp
+  ctx.restore();
+}
+
+function showPolaroid(winner) {
+  if (!winner || !proof) return;
+  renderPolaroidPhoto(winner);
+  $('polaroidTitle').textContent  = (proof.raffleName || '').toUpperCase();
+  $('polaroidName').textContent   = winner.name.toUpperCase();
+  $('polaroidDate').textContent   = new Date(proof.timestamp)
+    .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    .toUpperCase();
+  $('polaroidCommit').textContent = '#' + proof.commit.slice(0, 8);
+
+  // Camera flash: 0 → 1 (80ms in via .flash-on) → 0 (320ms out via .fading)
+  playSfx('polaroid');
+  const flash = $('cameraFlash');
+  flash.classList.remove('hidden', 'flash-on', 'fading');
+  requestAnimationFrame(() => flash.classList.add('flash-on'));
+  setTimeout(() => {
+    flash.classList.remove('flash-on');
+    flash.classList.add('fading');
+    setTimeout(() => flash.classList.add('hidden'), 350);
+  }, 90);
+
+  // Polaroid drops in shortly after the flash peaks.
+  setTimeout(() => {
+    const p = $('polaroid');
+    p.classList.remove('hidden');
+    requestAnimationFrame(() => p.classList.add('show'));
+    $('endScreen').classList.add('with-polaroid');
+    $('polaroidActions').classList.remove('hidden');
+  }, 220);
+}
+
+function hidePolaroidUI() {
+  const p = $('polaroid');
+  p.classList.add('hidden');
+  p.classList.remove('show');
+  $('polaroidActions').classList.add('hidden');
+  $('endScreen').classList.remove('with-polaroid');
+  const flash = $('cameraFlash');
+  flash.classList.add('hidden');
+  flash.classList.remove('flash-on', 'fading');
+  $('replayStatus').textContent = '';
 }
 
 // =========================================================================
@@ -1805,22 +2204,17 @@ function render() {
   if (phase === 'benched' && benched.length > 0) renderBenched(ctx, phaseTimer);
   if (phase === 'finalIntro' && pair) renderFinalIntro(ctx, phaseTimer);
 
-  // HUD (no shake)
-  ctx.font = '16px "Press Start 2P", monospace';
-  ctx.fillStyle = '#fff';
+  // HUD (no shake) — VS label only; the fighter count is visually obvious.
+  ctx.font = '22px "Press Start 2P", monospace';
   ctx.strokeStyle = '#000';
-  ctx.lineWidth = 5;
-  ctx.textAlign = 'left';
-  const hud = `FIGHTERS: ${active.length}/${fighters.length}`;
-  ctx.strokeText(hud, 12, 30);
-  ctx.fillText(hud, 12, 30);
+  ctx.lineWidth = 6;
 
   if (phase !== 'done' && phase !== 'finalIntro' && pair) {
     ctx.textAlign = 'center';
     const vs = `${pair.aggressor.name}  VS  ${pair.defender.name}`;
-    ctx.strokeText(vs, CANVAS_W/2, 30);
-    ctx.fillStyle = '#facc15';
-    ctx.fillText(vs, CANVAS_W/2, 30);
+    ctx.strokeText(vs, CANVAS_W/2, 36);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(vs, CANVAS_W/2, 36);
   }
 }
 
@@ -1874,6 +2268,7 @@ async function boot() {
   sfx.winner = new Audio(SFX_SRC.winner); sfx.winner.volume = 0.7;
   sfx.final  = new Audio(SFX_SRC.final);  sfx.final.volume  = 0.8;
   sfx.scream = new Audio(SFX_SRC.scream); sfx.scream.volume = 0.8;
+  sfx.polaroid = new Audio(SFX_SRC.polaroid); sfx.polaroid.volume = 0.7;
 
   // Pre-warm: prime the speed label
   speedMul = parseFloat($('speed').value);
@@ -1881,7 +2276,86 @@ async function boot() {
 
   await regenerateSeed();  // initial commit ready before host adds names
   renderRoster();
+  await maybeAutoReplay();
 }
+
+// =========================================================================
+// REPLAY URL — decode #r=<base64> (compact) or #replay=<base64> (legacy)
+// on load and auto-run the rumble
+// =========================================================================
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+  ));
+}
+
+function showReplayBanner(p) {
+  const banner = $('replayBanner');
+  banner.classList.remove('hidden', 'replay-error');
+  const titleHtml = p.raffleName
+    ? ` · <span class="text-yellow-300 font-bold">${escapeHtml(p.raffleName)}</span>`
+    : '';
+  $('replayBannerText').innerHTML =
+    `🔁 Replaying rumble from <span id="replayBannerDate"></span> · commit <span id="replayBannerCommit"></span>${titleHtml}`;
+  $('replayBannerDate').textContent = new Date(p.timestamp).toLocaleString();
+  $('replayBannerCommit').textContent = '#' + p.commit.slice(0, 8);
+}
+
+function showReplayError(reason) {
+  const banner = $('replayBanner');
+  banner.classList.remove('hidden');
+  banner.classList.add('replay-error');
+  $('replayBannerText').textContent = `⚠ Failed to load replay: ${reason}`;
+  // Strip the bogus hash so a refresh doesn't re-trigger.
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+async function maybeAutoReplay() {
+  const compact = location.hash.match(/^#r=([A-Za-z0-9_-]+)$/);
+  const legacy  = location.hash.match(/^#replay=([A-Za-z0-9_-]+)$/);
+  if (!compact && !legacy) return;
+  let replayProof;
+  try {
+    if (compact) {
+      const unpacked = unpackProof(base64UrlToBytes(compact[1]));
+      // commit is sha256(serverSeed) — recompute so verifyProof can validate.
+      const commitDerived = await sha256Hex(unpacked.serverSeed);
+      replayProof = { ...unpacked, commit: commitDerived, winnerName: null };
+    } else {
+      const b64 = legacy[1].replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64 + '==='.slice((b64.length + 3) % 4);
+      const json = decodeURIComponent(escape(atob(padded)));
+      replayProof = JSON.parse(json);
+    }
+  } catch (e) {
+    showReplayError('malformed replay link: ' + e.message);
+    return;
+  }
+
+  // Compact links don't carry a winnerName — verifyProof requires one (it
+  // checks the algorithm-derived winner against the claim). For compact
+  // links the seed alone determines the winner, so we skip verifyProof and
+  // trust the deterministic replay. For legacy links the full proof is
+  // present; run the verifier as before.
+  if (legacy) {
+    const v = await verifyProof(JSON.stringify(replayProof));
+    if (!v.ok) { showReplayError(v.reason); return; }
+  }
+
+  // Populate roster from proof and auto-start.
+  names = [...replayProof.roster];
+  renderRoster();
+  showReplayBanner(replayProof);
+  // Replays auto-run at 2.5× — viewers want the result, not a slow play.
+  // Sync the slider + label so the on-screen UI matches the actual speed.
+  speedMul = 2.5;
+  $('speed').value = String(speedMul);
+  $('speedLabel').textContent = speedMul.toFixed(2).replace(/\.?0+$/, '') + 'x';
+  setTimeout(() => {
+    startRumble(replayProof).catch(e => console.error(e));
+  }, 700);
+}
+
 boot();
 </script>
 </body>
